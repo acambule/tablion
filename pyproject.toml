@@ -1,0 +1,9 @@
+[project]
+name = "camedia-file-manager"
+version = "1.0.0"
+description = "Dateimanager+"
+dependencies = ["PySide6", "send2trash"]
+authors = [{name = "CAMEDIA GmbH"}]
+
+[project.scripts]
+camedia-file-manager = "src.main:main"  # Kommando später
