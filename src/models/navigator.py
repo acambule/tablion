@@ -251,7 +251,10 @@ class NavigatorManager(QObject):
                 continue
 
             local_path = os.path.normpath(os.path.expanduser(url.toLocalFile()))
-            if not os.path.isdir(local_path):
+            try:
+                if not os.path.isdir(local_path):
+                    continue
+            except (OSError, PermissionError):
                 continue
             if local_path in seen:
                 continue
@@ -304,17 +307,24 @@ class NavigatorManager(QObject):
 
         return inserted
 
+
     def load_data(self):
         if not self.data_path.exists():
-            self.data_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                self.data_path.parent.mkdir(parents=True, exist_ok=True)
+            except (OSError, PermissionError):
+                pass
             default_data = copy.deepcopy(DEFAULT_NAVIGATOR_DATA)
-            self.save_data(default_data)
+            try:
+                self.save_data(default_data)
+            except Exception:
+                pass
             return default_data
 
         try:
             with self.data_path.open('r', encoding='utf-8') as file:
                 data = json.load(file)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, PermissionError):
             data = copy.deepcopy(DEFAULT_NAVIGATOR_DATA)
 
         groups = data.get('groups') if isinstance(data, dict) else None
@@ -323,10 +333,17 @@ class NavigatorManager(QObject):
 
         return data
 
+
     def save_data(self, data):
-        self.data_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.data_path.open('w', encoding='utf-8') as file:
-            json.dump(data, file, ensure_ascii=False, indent=2)
+        try:
+            self.data_path.parent.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError):
+            return
+        try:
+            with self.data_path.open('w', encoding='utf-8') as file:
+                json.dump(data, file, ensure_ascii=False, indent=2)
+        except (OSError, PermissionError):
+            pass
 
     def build_from_data(self, data):
         rendered_groups = 0
@@ -876,19 +893,24 @@ class NavigatorManager(QObject):
         seen_paths = set()
 
         def iter_subdirs(path_obj):
+            result = []
             try:
                 for child in path_obj.iterdir():
                     try:
                         if child.is_dir():
-                            yield child
-                    except OSError:
+                            result.append(child)
+                    except (OSError, PermissionError):
                         continue
-            except OSError:
-                return
+            except (OSError, PermissionError):
+                return []
+            return result
 
         def add_path(path):
             expanded_path = os.path.expanduser(path)
-            if not os.path.isdir(expanded_path):
+            try:
+                if not os.path.isdir(expanded_path):
+                    return
+            except (OSError, PermissionError):
                 return
             normalized = os.path.normpath(expanded_path)
             if normalized in seen_paths:
@@ -900,15 +922,27 @@ class NavigatorManager(QObject):
 
         for base in ['/mnt', '/media']:
             base_path = Path(base)
-            if base_path.is_dir():
-                for entry in sorted(iter_subdirs(base_path)):
-                    add_path(str(entry))
+            try:
+                if base_path.is_dir():
+                    for entry in sorted(iter_subdirs(base_path)):
+                        add_path(str(entry))
+            except (OSError, PermissionError):
+                continue
 
         run_media_base = Path('/run/media')
-        if run_media_base.is_dir():
-            for user_dir in sorted(iter_subdirs(run_media_base)):
-                for mount_dir in sorted(iter_subdirs(user_dir)):
-                    add_path(str(mount_dir))
+        try:
+            if run_media_base.is_dir():
+                try:
+                    for user_dir in sorted(iter_subdirs(run_media_base)):
+                        try:
+                            for mount_dir in sorted(iter_subdirs(user_dir)):
+                                add_path(str(mount_dir))
+                        except (OSError, PermissionError):
+                            continue
+                except (OSError, PermissionError):
+                    pass
+        except (OSError, PermissionError):
+            pass
 
         entries = []
         for path in drive_paths:

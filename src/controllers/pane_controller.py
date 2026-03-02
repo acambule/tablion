@@ -1,9 +1,11 @@
 import json
+import os
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote
 
-from PySide6.QtCore import QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex
+from PySide6.QtCore import QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex, QProcess
 from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QDesktopServices, QIcon, QDrag, QKeySequence, QPen
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QHBoxLayout, QListView, QMenu, QMessageBox, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QWidget
@@ -91,7 +93,7 @@ class PaneController(QObject):
     _CLIPBOARD_MIME_TYPE = "application/x-tablion-copy-paths"
     _CLIPBOARD_OPERATION_MIME_TYPE = "application/x-tablion-clipboard-operation"
 
-    def __init__(self, file_system_model, parent=None):
+    def __init__(self, file_system_model, parent=None, editor_settings=None):
         super().__init__(parent)
         loader = QUiLoader()
         pane_ui_path = Path(__file__).resolve().parent.parent / "ui" / "pane.ui"
@@ -106,6 +108,7 @@ class PaneController(QObject):
         self.btn_view_mode = None
         self.view_mode_actions = {}
         self.view_mode_icons = {}
+        self._editor_settings = editor_settings
         self.tab_states: list[TabState] = []
         self.active_tab_index = -1
         self._restoring_tab_switch = False
@@ -600,6 +603,9 @@ class PaneController(QObject):
                         self.rename_current_item()
                         return True
                     return False
+                if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    self.activate_selection()
+                    return True
                 if event.matches(QKeySequence.StandardKey.New):
                     self.create_file()
                     return True
@@ -638,6 +644,9 @@ class PaneController(QObject):
                         self.rename_current_item()
                         return True
                     return False
+                if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    self.activate_selection()
+                    return True
                 if event.matches(QKeySequence.StandardKey.New):
                     self.create_file()
                     return True
@@ -741,6 +750,31 @@ class PaneController(QObject):
             return self.icon_view_adapter
         return self.tree_view_adapter
 
+    _EDITABLE_EXTENSIONS = {
+        ".desktop",
+        ".sh",
+        ".txt",
+        ".md",
+        ".py",
+        ".js",
+        ".ts",
+        ".css",
+        ".json",
+        ".xml",
+        ".html",
+        ".yaml",
+        ".yml",
+        ".cfg",
+        ".ini",
+        ".log",
+    }
+    _APPLICATION_LAUNCH_EXTENSIONS = {
+        ".desktop",
+        ".sh",
+        ".appimage",
+        ".run",
+    }
+
     def selected_paths(self):
         adapter = self.active_view_adapter()
         if adapter is None:
@@ -752,6 +786,65 @@ class PaneController(QObject):
         if adapter is None:
             return 0
         return adapter.selected_count()
+
+    def _is_editable_selection(self):
+        paths = self.selected_paths()
+        if not paths:
+            return False
+        suffix = Path(paths[0]).suffix.lower()
+        return suffix in self._EDITABLE_EXTENSIONS
+
+    def _is_application_target(self, path: str) -> bool:
+        path_obj = Path(path)
+        if path_obj.is_dir():
+            return False
+        suffix = path_obj.suffix.lower()
+        if suffix in self._APPLICATION_LAUNCH_EXTENSIONS:
+            return True
+        try:
+            return path_obj.exists() and os.access(path, os.X_OK)
+        except OSError:
+            return False
+
+    def activate_selection(self):
+        paths = self.selected_paths()
+        if not paths:
+            return
+        target = paths[0]
+        if Path(target).is_dir():
+            self.navigate_to(target)
+            return
+        if self._is_application_target(target):
+            behavior = "start"
+            if self._editor_settings is not None:
+                behavior = self._editor_settings.application_double_click_behavior
+            if behavior == "edit" and Path(target).suffix.lower() in self._EDITABLE_EXTENSIONS:
+                self.open_selection_in_editor()
+                return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(target))
+
+    def open_selection_in_editor(self):
+        paths = self.selected_paths()
+        if not paths:
+            return
+        target = paths[0]
+        path_obj = Path(target)
+        if path_obj.is_dir():
+            return
+
+        editor_cmd = None
+        if self._editor_settings is not None:
+            editor_cmd = self._editor_settings.preferred_editor()
+        if not editor_cmd:
+            editor_cmd = os.environ.get("TABLION_EDITOR")
+        if editor_cmd:
+            parts = shlex.split(editor_cmd)
+            if parts:
+                program, *args = parts
+                QProcess.startDetached(program, [*args, target])
+                return
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(target))
 
     def copy_selection_to_clipboard(self):
         source_paths = self.selected_paths()
@@ -1527,6 +1620,12 @@ class PaneController(QObject):
 
         menu.addSeparator()
 
+        edit_icon = QIcon.fromTheme("accessories-text-editor")
+        if edit_icon.isNull():
+            edit_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
+        action_edit = menu.addAction(edit_icon, "Bearbeiten")
+        action_edit.setEnabled(self._is_editable_selection())
+
         rename_icon = QIcon.fromTheme("edit-rename")
         if rename_icon.isNull():
             rename_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
@@ -1584,6 +1683,9 @@ class PaneController(QObject):
             return
         if chosen == action_rename:
             self.rename_current_item()
+            return
+        if chosen == action_edit:
+            self.open_selection_in_editor()
             return
 
     def start_tab_path_drag(self, tab_index):

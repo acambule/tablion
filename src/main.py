@@ -15,7 +15,10 @@ from PySide6.QtCore import QDir, QEvent, Qt, QTimer, QStandardPaths
 from controllers.group_controller import GroupController
 from debug_log import debug_exception, debug_log, initialize_debug_log
 from localization import setup_localization
+from models.editor_settings import EditorSettings
 from models.navigator import NavigatorManager
+from widgets.settings_dialog import SettingsDialog
+from single_application import SingleApplication
 from widgets.group_workspace_widget import GroupWorkspaceWidget
 
 
@@ -30,7 +33,10 @@ class MainWindow(QMainWindow):
         self.navigator_data_path = Path()
         self.session_data_path = Path()
         self.debug_log_path = Path()
+        self.editor_settings_path = Path()
+        self.editor_settings = None
         self.initialize_storage_paths()
+        self.editor_settings = EditorSettings(self.editor_settings_path)
         initialize_debug_log(self.debug_log_path)
         debug_log("MainWindow.__init__ started")
 
@@ -43,6 +49,7 @@ class MainWindow(QMainWindow):
         self.btn_nav_back = None
         self.btn_nav_up = None
         self.action_refresh_tree = None
+        self._settings_dialog = None
         self.plain_tabbing_mode = True
         self._persisted_once = False
         self._restored_splitter_sizes = False
@@ -95,6 +102,7 @@ class MainWindow(QMainWindow):
         self.navigator_data_path = config_dir / 'navigator.json'
         self.session_data_path = state_dir / 'session.json'
         self.debug_log_path = state_dir / 'debug.log'
+        self.editor_settings_path = config_dir / 'editor_settings.json'
 
         self.migrate_legacy_json_if_needed()
 
@@ -149,6 +157,7 @@ class MainWindow(QMainWindow):
             render_active_group=self.render_active_group_pane,
             update_nav_buttons=self.update_nav_buttons,
             plain_tabbing_mode=self.plain_tabbing_mode,
+            editor_settings=self.editor_settings,
         )
         self.group_controller.initialize_existing_groups()
 
@@ -636,6 +645,11 @@ class MainWindow(QMainWindow):
             self.btn_nav_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
 
             burger_menu = QMenu(self.btn_nav_menu)
+            settings_icon = QIcon.fromTheme("preferences-system")
+            if settings_icon.isNull():
+                settings_icon = style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
+            action_settings = burger_menu.addAction(settings_icon, "Einstellungen")
+            action_settings.triggered.connect(self.show_settings_dialog)
             info_icon = QIcon.fromTheme("help-about")
             if info_icon.isNull():
                 info_icon = style.standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
@@ -778,15 +792,52 @@ class MainWindow(QMainWindow):
         QApplication.instance().quit()
 
     def show_about_info(self):
-        info_text = (
-            f"{APP_NAME}\n\n"
-            "Ein einfacher Dateimanager auf Basis von PySide6.\n\n"
-            f"Navigator-Daten:\n{self.navigator_data_path}\n\n"
-            f"Sitzungsdaten:\n{self.session_data_path}"
-        )
-        QMessageBox.information(self.ui, "Über / Info", info_text)
+        try:
+            # use the extracted AboutDialog if available
+            from widgets.about_dialog import AboutDialog
 
-if __name__ == "__main__":
+            dlg = AboutDialog(self, self.navigator_data_path, self.session_data_path)
+            dlg.exec_centered()
+        except Exception:
+            try:
+                info_text = (
+                    f"{APP_NAME}\n\n"
+                    "Ein einfacher Dateimanager auf Basis von PySide6.\n\n"
+                    f"Navigator-Daten:\n{self.navigator_data_path}\n\n"
+                    f"Sitzungsdaten:\n{self.session_data_path}"
+                )
+                QMessageBox.information(self.ui, "Über / Info", info_text)
+            except Exception:
+                pass
+
+    def show_settings_dialog(self):
+        if self.editor_settings is None:
+            return
+        try:
+            if self._settings_dialog is not None and self._settings_dialog.isVisible():
+                self._settings_dialog.raise_()
+                self._settings_dialog.activateWindow()
+                return
+
+            parent_widget = self.ui if isinstance(self.ui, QWidget) else self
+            self._settings_dialog = SettingsDialog(parent_widget, self.editor_settings)
+            self._settings_dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            self._settings_dialog.destroyed.connect(lambda _=None: setattr(self, "_settings_dialog", None))
+
+            self._settings_dialog.setWindowModality(Qt.WindowModality.NonModal)
+            self._settings_dialog.adjustSize()
+            self._settings_dialog.show()
+            self._settings_dialog.raise_()
+            self._settings_dialog.activateWindow()
+        except Exception as error:
+            debug_exception("MainWindow.show_settings_dialog failed", error)
+            QMessageBox.warning(self.ui, "Einstellungen", "Einstellungsfenster konnte nicht geöffnet werden.")
+
+def main(argv=None):
+    # Application entry point used by packaging entry-points
+    if argv is None:
+        argv = sys.argv
+
     def _global_excepthook(exc_type, exc_value, exc_traceback):
         try:
             details = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
@@ -797,23 +848,33 @@ if __name__ == "__main__":
 
     sys.excepthook = _global_excepthook
 
-    app = QApplication(sys.argv)
+    app = SingleApplication(list(argv))
+    if app.is_running():
+        return 0
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_NAME)
     setup_localization(app)
-    project_root = Path(__file__).resolve().parent.parent
-    icon_candidates = [
-        project_root / "assets" / "tablion-icon.png",
-        project_root / "assets" / "tablion-icon.svg",
-    ]
-    for icon_path in icon_candidates:
-        if icon_path.exists():
-            icon = QIcon(str(icon_path))
-            if not icon.isNull():
-                app.setWindowIcon(icon)
-                break
+    icon = QIcon.fromTheme("system-file-manager")
+    if icon.isNull():
+        project_root = Path(__file__).resolve().parent.parent
+        icon_candidates = [
+            project_root / "assets" / "tablion-icon.png",
+            project_root / "assets" / "tablion-icon.svg",
+        ]
+        for icon_path in icon_candidates:
+            if icon_path.exists():
+                icon = QIcon(str(icon_path))
+                if not icon.isNull():
+                    break
+    if not icon.isNull():
+        app.setWindowIcon(icon)
 
     window = MainWindow()
+    app.set_activation_window(window.ui)
     window.ui.setWindowIcon(app.windowIcon())
     window.show()
-    sys.exit(app.exec())
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

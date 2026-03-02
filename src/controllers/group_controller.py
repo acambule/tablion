@@ -1,8 +1,11 @@
+from typing import Optional
+
 from PySide6.QtCore import QDir
 from PySide6.QtWidgets import QInputDialog, QSizePolicy, QTabWidget, QWidget
 
 from debug_log import debug_exception, debug_log
 from localization import ask_yes_no
+from models.editor_settings import EditorSettings
 from widgets.group_workspace_widget import GroupWorkspaceWidget
 
 
@@ -19,6 +22,7 @@ class GroupController:
         render_active_group,
         update_nav_buttons,
         plain_tabbing_mode=True,
+        editor_settings: Optional[EditorSettings] = None,
     ):
         self.group_tabs = group_tabs
         self.model = model
@@ -29,6 +33,7 @@ class GroupController:
         self.render_active_group = render_active_group
         self.update_nav_buttons = update_nav_buttons
         self.plain_tabbing_mode = plain_tabbing_mode
+        self.editor_settings = editor_settings
 
         self.group_panes_by_page = {}
 
@@ -40,7 +45,11 @@ class GroupController:
     def initialize_existing_groups(self):
         for index in range(self.group_tabs.count()):
             page = self.group_tabs.widget(index)
-            pane_controller = GroupWorkspaceWidget(self.model, parent=self.host_ui)
+            pane_controller = GroupWorkspaceWidget(
+                self.model,
+                parent=self.host_ui,
+                editor_settings=self.editor_settings,
+            )
             pane_controller.widget.setParent(None)
             pane_controller.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self.group_panes_by_page[page] = pane_controller
@@ -51,7 +60,11 @@ class GroupController:
         start_path = QDir.cleanPath(start_path or QDir.homePath())
         page = QWidget(self.group_tabs)
 
-        pane_controller = GroupWorkspaceWidget(self.model, parent=self.host_ui)
+        pane_controller = GroupWorkspaceWidget(
+            self.model,
+            parent=self.host_ui,
+            editor_settings=self.editor_settings,
+        )
         pane_controller.widget.setParent(None)
         pane_controller.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 

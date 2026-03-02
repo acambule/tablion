@@ -1,7 +1,10 @@
 import shiboken6
+from typing import Optional
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QSizePolicy, QSplitter, QVBoxLayout, QWidget
 
+from models.editor_settings import EditorSettings
 from controllers.pane_controller import PaneController
 
 
@@ -10,13 +13,14 @@ class GroupWorkspaceWidget(QWidget):
     navigationStateChanged = Signal(bool, bool)
     groupRequested = Signal()
 
-    def __init__(self, file_system_model, parent=None):
+    def __init__(self, file_system_model, parent=None, editor_settings: Optional[EditorSettings] = None):
         super().__init__(parent)
         self.widget = self
         self._model = file_system_model
         self._split_mode = "single"
         self._active_slot = "primary"
         self._is_active_group = False
+        self._editor_settings = editor_settings
         self._panes = {}
 
         self._layout = QVBoxLayout(self)
@@ -34,7 +38,7 @@ class GroupWorkspaceWidget(QWidget):
         self._render()
 
     def _create_pane(self, clone_from_primary=True):
-        pane = PaneController(self._model, parent=self)
+        pane = PaneController(self._model, parent=self, editor_settings=self._editor_settings)
         pane.widget.setParent(None)
         pane.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 

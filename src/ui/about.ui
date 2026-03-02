@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>AboutDialogUI</class>
+ <widget class="QWidget" name="AboutDialogUI">
+  <property name="windowTitle">
+   <string>Über / Info</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="introLabel">
+     <property name="text">
+      <string>&lt;b&gt;Tablion&lt;/b&gt;&lt;br/&gt;&lt;br/&gt;Ein einfacher Dateimanager auf Basis von PySide6.</string>
+     </property>
+     <property name="textFormat">
+      <enum>Qt::RichText</enum>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="pathsLabel">
+     <property name="text">
+      <string>Navigator-Daten:\n/some/path\n\nSitzungsdaten:\n/some/path</string>
+     </property>
+     <property name="textFormat">
+      <enum>Qt::RichText</enum>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="defaultLayout">
+     <item>
+      <widget class="QLabel" name="defaultLabel">
+       <property name="text">
+        <string>Standard-Dateimanager: unbekannt</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="setDefaultButton">
+       <property name="text">
+        <string>Tablion als Standard</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <spacer name="spacer"/>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="closeLayout">
+     <item>
+      <spacer name="closeSpacer"/>
+     </item>
+     <item>
+      <widget class="QPushButton" name="closeButton">
+       <property name="text">
+        <string>Schließen</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

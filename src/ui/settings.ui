@@ -1,0 +1,423 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SettingsDialogUI</class>
+ <widget class="QWidget" name="SettingsDialogUI">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>800</width>
+    <height>520</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Einstellungen</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QSplitter" name="splitter">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <widget class="QWidget" name="navigationPanel">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+      <layout class="QVBoxLayout" name="navigationLayout">
+       <item>
+           <widget class="QLineEdit" name="searchLineEdit">
+            <property name="placeholderText">
+             <string>Settings filtern...</string>
+            </property>
+           </widget>
+       </item>
+       <item>
+           <widget class="QListWidget" name="categoriesList">
+            <property name="selectionMode">
+             <enum>QAbstractItemView::SingleSelection</enum>
+            </property>
+            <property name="iconSize">
+             <size>
+              <width>18</width>
+              <height>18</height>
+             </size>
+            </property>
+            <item>
+             <property name="text">
+              <string>Allgemein</string>
+             </property>
+             <property name="icon">
+              <iconset theme="preferences-system"/>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Benutzeroberfläche</string>
+             </property>
+             <property name="icon">
+              <iconset theme="preferences-desktop-theme"/>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Dateioperationen</string>
+             </property>
+             <property name="icon">
+              <iconset theme="document-open"/>
+             </property>
+            </item>
+           </widget>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="contentPanel">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+        <horstretch>1</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+      <layout class="QVBoxLayout" name="contentLayout">
+       <item>
+        <widget class="QStackedWidget" name="categoryStack">
+         <widget class="QWidget" name="pageGeneral">
+          <layout class="QVBoxLayout" name="generalLayout">
+           <item>
+                  <widget class="QLabel" name="generalCategoryTitle">
+                   <property name="text">
+                     <string>Allgemein</string>
+                   </property>
+                   <property name="alignment">
+                     <set>Qt::AlignLeft|Qt::AlignVCenter</set>
+             </property>
+                   <property name="font">
+                     <font>
+                      <pointsize>12</pointsize>
+                      <weight>75</weight>
+                      <bold>true</bold>
+                     </font>
+                   </property>
+            </widget>
+           </item>
+           <item>
+                  <widget class="QFrame" name="generalOptionsPanel">
+                   <property name="frameShape">
+                     <enum>QFrame::StyledPanel</enum>
+             </property>
+                   <property name="frameShadow">
+                     <enum>QFrame::Raised</enum>
+             </property>
+                   <layout class="QVBoxLayout" name="generalOptionsLayout">
+                     <item>
+                      <layout class="QFormLayout" name="generalFormLayout">
+                        <item row="0" column="0">
+                         <widget class="QLabel" name="defaultEditorLabel">
+                           <property name="text">
+                            <string>Standardeditor</string>
+                           </property>
+                         </widget>
+                        </item>
+                        <item row="0" column="1">
+                         <widget class="QLineEdit" name="defaultEditorLineEdit">
+                           <property name="placeholderText">
+                            <string>z. B. /usr/bin/kate</string>
+                           </property>
+                         </widget>
+                        </item>
+                      </layout>
+                     </item>
+                   </layout>
+                  </widget>
+                </item>
+                <item>
+                  <spacer name="generalBottomSpacer">
+                   <property name="orientation">
+                     <enum>Qt::Vertical</enum>
+                   </property>
+                   <property name="sizeHint">
+                     <size>
+                      <width>20</width>
+                      <height>40</height>
+                     </size>
+                   </property>
+                  </spacer>
+                </item>
+                <item>
+                  <layout class="QHBoxLayout" name="generalDescriptionDividerLayout">
+                   <item>
+                    <widget class="QFrame" name="generalDescriptionDivider">
+                     <property name="maximumSize">
+                      <size>
+                       <width>320</width>
+                       <height>2</height>
+                      </size>
+                     </property>
+                     <property name="frameShape">
+                      <enum>QFrame::HLine</enum>
+                     </property>
+                     <property name="frameShadow">
+                      <enum>QFrame::Sunken</enum>
+                     </property>
+                    </widget>
+                   </item>
+                   <item>
+                    <spacer name="generalDescriptionDividerSpacer">
+                     <property name="orientation">
+                      <enum>Qt::Horizontal</enum>
+                     </property>
+                     <property name="sizeHint">
+                      <size>
+                       <width>40</width>
+                       <height>20</height>
+                      </size>
+                     </property>
+                    </spacer>
+                   </item>
+                  </layout>
+                </item>
+                <item>
+                  <widget class="QLabel" name="generalDescriptionLabel">
+                   <property name="wordWrap">
+                     <bool>true</bool>
+                   </property>
+                   <property name="text">
+                     <string>Legt fest, welcher Editor bei der Aktion "Bearbeiten" verwendet wird.</string>
+                   </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+         <widget class="QWidget" name="pageAppearance">
+          <layout class="QVBoxLayout" name="appearanceLayout">
+           <item>
+                  <widget class="QLabel" name="appearanceCategoryTitle">
+                   <property name="text">
+              <string>Benutzeroberfläche</string>
+             </property>
+                   <property name="alignment">
+                     <set>Qt::AlignLeft|Qt::AlignVCenter</set>
+                   </property>
+                   <property name="font">
+                     <font>
+                      <pointsize>12</pointsize>
+                      <weight>75</weight>
+                      <bold>true</bold>
+                     </font>
+                   </property>
+                  </widget>
+                </item>
+                <item>
+                  <widget class="QFrame" name="appearanceOptionsPanel">
+                   <property name="frameShape">
+                     <enum>QFrame::StyledPanel</enum>
+                   </property>
+                   <property name="frameShadow">
+                     <enum>QFrame::Raised</enum>
+                   </property>
+                   <layout class="QVBoxLayout" name="appearanceOptionsLayout">
+              <item>
+               <widget class="QLabel" name="appearancePlaceholder">
+                <property name="text">
+                 <string>Keine Optionen vorhanden.</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+                <item>
+                  <spacer name="appearanceBottomSpacer">
+                   <property name="orientation">
+                     <enum>Qt::Vertical</enum>
+                   </property>
+                   <property name="sizeHint">
+                     <size>
+                      <width>20</width>
+                      <height>40</height>
+                     </size>
+                   </property>
+                  </spacer>
+                </item>
+                <item>
+                  <layout class="QHBoxLayout" name="appearanceDescriptionDividerLayout">
+                   <item>
+                    <widget class="QFrame" name="appearanceDescriptionDivider">
+                     <property name="maximumSize">
+                      <size>
+                       <width>320</width>
+                       <height>2</height>
+                      </size>
+                     </property>
+                     <property name="frameShape">
+                      <enum>QFrame::HLine</enum>
+                     </property>
+                     <property name="frameShadow">
+                      <enum>QFrame::Sunken</enum>
+                     </property>
+                    </widget>
+                   </item>
+                   <item>
+                    <spacer name="appearanceDescriptionDividerSpacer">
+                     <property name="orientation">
+                      <enum>Qt::Horizontal</enum>
+                     </property>
+                     <property name="sizeHint">
+                      <size>
+                       <width>40</width>
+                       <height>20</height>
+                      </size>
+                     </property>
+                    </spacer>
+                   </item>
+                  </layout>
+                </item>
+                <item>
+                  <widget class="QLabel" name="appearanceDescriptionLabel">
+                   <property name="wordWrap">
+                     <bool>true</bool>
+                   </property>
+                   <property name="text">
+                     <string>Optionen zur Darstellung und zum Verhalten der Benutzeroberfläche.</string>
+                   </property>
+                  </widget>
+                </item>
+          </layout>
+         </widget>
+         <widget class="QWidget" name="pageFileOperations">
+          <layout class="QVBoxLayout" name="fileOpsLayout">
+           <item>
+                  <widget class="QLabel" name="fileOpsCategoryTitle">
+                   <property name="text">
+              <string>Dateioperationen</string>
+             </property>
+                   <property name="alignment">
+                     <set>Qt::AlignLeft|Qt::AlignVCenter</set>
+                   </property>
+                   <property name="font">
+                     <font>
+                      <pointsize>12</pointsize>
+                      <weight>75</weight>
+                      <bold>true</bold>
+                     </font>
+                   </property>
+                  </widget>
+                </item>
+                <item>
+                  <widget class="QFrame" name="fileOpsOptionsPanel">
+                   <property name="frameShape">
+                     <enum>QFrame::StyledPanel</enum>
+                   </property>
+                   <property name="frameShadow">
+                     <enum>QFrame::Raised</enum>
+                   </property>
+                   <layout class="QVBoxLayout" name="fileOpsOptionsLayout">
+              <item>
+                   <layout class="QFormLayout" name="fileOpsFormLayout">
+                  <item row="0" column="0">
+                   <widget class="QLabel" name="appDoubleClickBehaviorLabel">
+                    <property name="text">
+                     <string>Doppelklick auf Anwendungen</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="0" column="1">
+                   <widget class="QComboBox" name="appDoubleClickBehaviorCombo">
+                    <item>
+                     <property name="text">
+                    <string>Starten</string>
+                     </property>
+                    </item>
+                    <item>
+                     <property name="text">
+                    <string>Im Editor öffnen</string>
+                     </property>
+                    </item>
+                   </widget>
+                  </item>
+                   </layout>
+              </item>
+             </layout>
+            </widget>
+           </item>
+                <item>
+                  <spacer name="fileOpsBottomSpacer">
+                   <property name="orientation">
+                     <enum>Qt::Vertical</enum>
+                   </property>
+                   <property name="sizeHint">
+                     <size>
+                      <width>20</width>
+                      <height>40</height>
+                     </size>
+                   </property>
+                  </spacer>
+                </item>
+                <item>
+                  <layout class="QHBoxLayout" name="fileOpsDescriptionDividerLayout">
+                   <item>
+                    <widget class="QFrame" name="fileOpsDescriptionDivider">
+                     <property name="maximumSize">
+                      <size>
+                       <width>320</width>
+                       <height>2</height>
+                      </size>
+                     </property>
+                     <property name="frameShape">
+                      <enum>QFrame::HLine</enum>
+                     </property>
+                     <property name="frameShadow">
+                      <enum>QFrame::Sunken</enum>
+                     </property>
+                    </widget>
+                   </item>
+                   <item>
+                    <spacer name="fileOpsDescriptionDividerSpacer">
+                     <property name="orientation">
+                      <enum>Qt::Horizontal</enum>
+                     </property>
+                     <property name="sizeHint">
+                      <size>
+                       <width>40</width>
+                       <height>20</height>
+                      </size>
+                     </property>
+                    </spacer>
+                   </item>
+                  </layout>
+                </item>
+                <item>
+                  <widget class="QLabel" name="fileOpsDescriptionLabel">
+                   <property name="wordWrap">
+                     <bool>true</bool>
+                   </property>
+                   <property name="text">
+                     <string>Steuert das Standardverhalten beim Öffnen von Anwendungen per Doppelklick.</string>
+                   </property>
+                  </widget>
+                </item>
+          </layout>
+         </widget>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Apply|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
