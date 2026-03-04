@@ -7,8 +7,8 @@ from PySide6.QtWidgets import (
     QApplication,
     QCompleter,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
+    QMenu,
     QSizePolicy,
     QStackedLayout,
     QStyle,
@@ -24,6 +24,7 @@ class PathBar(QWidget):
         super().__init__(parent)
         self._current_path = os.path.expanduser("~")
         self._bar_height = bar_height
+        self._max_primary_subdir_items = 18
 
         root_layout = QHBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -35,7 +36,9 @@ class PathBar(QWidget):
 
         self._stack = QStackedLayout()
         self._crumb_buttons = []
+        self._crumb_arrow_buttons = []
         self._crumb_paths = {}
+        self._crumb_arrow_paths = {}
         self._crumb_press_pos = QPoint()
         self._crumb_drag_button = None
 
@@ -271,9 +274,14 @@ class PathBar(QWidget):
             if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                 self._crumb_drag_button = None
 
+        if watched in self._crumb_arrow_buttons:
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self._show_subdirectory_menu(watched)
+                return True
+
         if watched == self._crumbs_widget and event.type() == QEvent.Type.MouseButtonPress:
             clicked_widget = self._crumbs_widget.childAt(event.position().toPoint())
-            if clicked_widget not in self._crumb_buttons:
+            if clicked_widget not in self._crumb_buttons and clicked_widget not in self._crumb_arrow_buttons:
                 self.start_edit_mode()
                 return True
 
@@ -286,7 +294,9 @@ class PathBar(QWidget):
 
     def _render_breadcrumbs(self, path):
         self._crumb_buttons.clear()
+        self._crumb_arrow_buttons.clear()
         self._crumb_paths.clear()
+        self._crumb_arrow_paths.clear()
         while self._crumbs_layout.count():
             item = self._crumbs_layout.takeAt(0)
             widget = item.widget()
@@ -309,14 +319,79 @@ class PathBar(QWidget):
             self._crumb_paths[button] = target_path
 
             if index < len(parts) - 1:
-                sep_label = QLabel("›", self._crumbs_widget)
-                sep_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                sep_label.setMinimumHeight(self._bar_height)
-                sep_label.setMaximumHeight(self._bar_height)
-                sep_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                self._crumbs_layout.addWidget(sep_label)
+                arrow_button = QToolButton(self._crumbs_widget)
+                arrow_button.setText("›")
+                arrow_button.setAutoRaise(True)
+                arrow_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+                arrow_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                arrow_button.setMinimumHeight(self._bar_height)
+                arrow_button.setMaximumHeight(self._bar_height)
+                arrow_button.installEventFilter(self)
+                self._crumbs_layout.addWidget(arrow_button)
+                self._crumb_arrow_buttons.append(arrow_button)
+                self._crumb_arrow_paths[arrow_button] = target_path
 
         self._crumbs_layout.addStretch(1)
+
+    def _list_subdirectories(self, parent_path):
+        try:
+            if not os.path.isdir(parent_path):
+                return []
+        except OSError:
+            return []
+
+        names = []
+        try:
+            with os.scandir(parent_path) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            names.append(entry.name)
+                    except OSError:
+                        continue
+        except OSError:
+            return []
+
+        return sorted(names, key=str.lower)
+
+    def _show_subdirectory_menu(self, arrow_button):
+        base_path = self._crumb_arrow_paths.get(arrow_button)
+        if not base_path:
+            return
+
+        subdirectories = self._list_subdirectories(base_path)
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu::item {"
+            " padding: 2px 14px;"
+            " min-height: 18px;"
+            "}"
+        )
+        if not subdirectories:
+            action = menu.addAction("(Keine Unterordner)")
+            action.setEnabled(False)
+        else:
+            visible = subdirectories[: self._max_primary_subdir_items]
+            for name in visible:
+                target_path = os.path.join(base_path, name)
+                action = menu.addAction(name)
+                action.triggered.connect(lambda checked=False, target=target_path: self.pathActivated.emit(target))
+
+            remaining = subdirectories[self._max_primary_subdir_items :]
+            if remaining:
+                more_menu = menu.addMenu("Weitere…")
+                more_menu.setStyleSheet(
+                    "QMenu::item {"
+                    " padding: 2px 14px;"
+                    " min-height: 18px;"
+                    "}"
+                )
+                for name in remaining:
+                    target_path = os.path.join(base_path, name)
+                    action = more_menu.addAction(name)
+                    action.triggered.connect(lambda checked=False, target=target_path: self.pathActivated.emit(target))
+
+        menu.exec(arrow_button.mapToGlobal(QPoint(0, arrow_button.height())))
 
     def _split_path(self, path):
         normalized = self._normalize_path(path)
