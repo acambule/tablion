@@ -1,12 +1,11 @@
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, Signal, QMimeData, QUrl, QPoint
+from PySide6.QtCore import QEvent, Qt, Signal, QMimeData, QUrl, QPoint, QStringListModel
 from PySide6.QtGui import QIcon, QDrag
 from PySide6.QtWidgets import (
     QApplication,
     QCompleter,
-    QFileSystemModel,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -56,14 +55,16 @@ class PathBar(QWidget):
         self._edit.setMinimumHeight(self._bar_height)
         self._edit.setMaximumHeight(self._bar_height)
         self._edit.returnPressed.connect(self._on_return_pressed)
+        self._edit.textEdited.connect(self._on_edit_text_edited)
         self._edit.installEventFilter(self)
 
-        completer_model = QFileSystemModel(self)
-        completer_model.setRootPath("")
-        completer = QCompleter(completer_model, self)
-        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-        completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        self._edit.setCompleter(completer)
+        self._completion_model = QStringListModel(self)
+        self._completer = QCompleter(self._completion_model, self)
+        self._completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._completer.setFilterMode(Qt.MatchFlag.MatchStartsWith)
+        self._completer.activated[str].connect(self._on_completion_activated)
+        self._edit.setCompleter(self._completer)
 
         self._stack.addWidget(self._crumbs_widget)
         self._stack.addWidget(self._edit)
@@ -146,6 +147,7 @@ class PathBar(QWidget):
         self._set_mode("edit")
         self._edit.setFocus()
         self._edit.selectAll()
+        self._update_completions(self._edit.text(), force_popup=False)
 
     def _exit_edit_mode(self):
         self._set_mode("breadcrumbs")
@@ -169,6 +171,84 @@ class PathBar(QWidget):
 
     def _on_return_pressed(self):
         self._accept_edit_mode()
+
+    def _on_edit_text_edited(self, text):
+        self._update_completions(text, force_popup=True)
+
+    def _expanded_path(self, value):
+        if not value:
+            return ""
+        return os.path.expanduser(value)
+
+    def _completion_context(self, text):
+        raw_text = text or ""
+        expanded_text = self._expanded_path(raw_text)
+        if not expanded_text:
+            return ("", "")
+
+        if expanded_text.endswith(os.path.sep):
+            return (expanded_text, "")
+
+        base_dir = os.path.dirname(expanded_text)
+        fragment = os.path.basename(expanded_text)
+        return (base_dir, fragment)
+
+    def _list_directory_candidates(self, base_dir, fragment):
+        if not base_dir:
+            return []
+        try:
+            if not os.path.isdir(base_dir):
+                return []
+        except OSError:
+            return []
+
+        fragment_lower = fragment.lower()
+        candidates = []
+        try:
+            with os.scandir(base_dir) as entries:
+                for entry in entries:
+                    try:
+                        if not entry.is_dir(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+
+                    name = entry.name
+                    if fragment and not name.lower().startswith(fragment_lower):
+                        continue
+                    candidates.append(name)
+        except OSError:
+            return []
+
+        candidates.sort(key=str.lower)
+        return candidates
+
+    def _update_completions(self, text, force_popup):
+        base_dir, fragment = self._completion_context(text)
+        names = self._list_directory_candidates(base_dir, fragment)
+
+        expanded_text = self._expanded_path(text)
+        if expanded_text.endswith(os.path.sep):
+            prefix = expanded_text
+        else:
+            prefix = (base_dir + os.path.sep) if base_dir else ""
+
+        values = [prefix + name for name in names]
+        self._completion_model.setStringList(values)
+        self._completer.setCompletionPrefix(prefix + fragment)
+
+        if force_popup and values:
+            self._completer.complete()
+
+    def _on_completion_activated(self, value):
+        if not value:
+            return
+        selected = self._expanded_path(value)
+        if not selected.endswith(os.path.sep):
+            selected = selected + os.path.sep
+        self._edit.setText(selected)
+        self._edit.setCursorPosition(len(selected))
+        self._update_completions(selected, force_popup=True)
 
     def eventFilter(self, watched, event):
         if watched in self._crumb_buttons:
