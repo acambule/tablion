@@ -81,10 +81,40 @@
        </sizepolicy>
       </property>
       <layout class="QVBoxLayout" name="contentLayout">
+        <property name="leftMargin">
+         <number>12</number>
+        </property>
+        <property name="topMargin">
+         <number>12</number>
+        </property>
+        <property name="rightMargin">
+         <number>12</number>
+        </property>
+        <property name="bottomMargin">
+         <number>12</number>
+        </property>
+        <property name="spacing">
+         <number>8</number>
+        </property>
        <item>
         <widget class="QStackedWidget" name="categoryStack">
          <widget class="QWidget" name="pageGeneral">
           <layout class="QVBoxLayout" name="generalLayout">
+             <property name="spacing">
+              <number>8</number>
+             </property>
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
            <item>
                   <widget class="QLabel" name="generalCategoryTitle">
                    <property name="text">
@@ -111,8 +141,14 @@
                      <enum>QFrame::Raised</enum>
              </property>
                    <layout class="QVBoxLayout" name="generalOptionsLayout">
+                    <property name="spacing">
+                     <number>12</number>
+                    </property>
                      <item>
                       <layout class="QFormLayout" name="generalFormLayout">
+                       <property name="verticalSpacing">
+                        <number>12</number>
+                       </property>
                         <item row="0" column="0">
                          <widget class="QLabel" name="defaultEditorLabel">
                            <property name="text">
@@ -127,7 +163,109 @@
                            </property>
                          </widget>
                         </item>
+                        <item row="1" column="0">
+                         <widget class="QLabel" name="languageLabel">
+                          <property name="text">
+                           <string>Sprache</string>
+                          </property>
+                         </widget>
+                        </item>
+                        <item row="1" column="1">
+                         <widget class="QComboBox" name="languagePreferenceCombo">
+                          <item>
+                           <property name="text">
+                            <string>Systemsprache</string>
+                           </property>
+                          </item>
+                          <item>
+                           <property name="text">
+                            <string>Deutsch</string>
+                           </property>
+                          </item>
+                          <item>
+                           <property name="text">
+                            <string>English</string>
+                           </property>
+                          </item>
+                         </widget>
+                        </item>
                       </layout>
+                     </item>
+                     <item>
+                      <widget class="QFrame" name="sessionManagementPanel">
+                       <property name="frameShape">
+                        <enum>QFrame::StyledPanel</enum>
+                       </property>
+                       <property name="frameShadow">
+                        <enum>QFrame::Raised</enum>
+                       </property>
+                       <layout class="QVBoxLayout" name="sessionManagementLayout">
+                        <property name="spacing">
+                         <number>10</number>
+                        </property>
+                        <item>
+                         <widget class="QLabel" name="sessionManagementTitleLabel">
+                          <property name="text">
+                           <string>Sitzung verwalten</string>
+                          </property>
+                          <property name="font">
+                           <font>
+                            <weight>75</weight>
+                            <bold>true</bold>
+                           </font>
+                          </property>
+                         </widget>
+                        </item>
+                        <item>
+                         <widget class="QLabel" name="sessionManagementHintLabel">
+                          <property name="wordWrap">
+                           <bool>true</bool>
+                          </property>
+                          <property name="text">
+                           <string>Exportiert/Importiert Tabgruppen und Navigator-Einträge.</string>
+                          </property>
+                         </widget>
+                        </item>
+                        <item>
+                         <layout class="QHBoxLayout" name="sessionManagementButtonsLayout">
+                          <item>
+                           <widget class="QPushButton" name="exportSessionButton">
+                            <property name="text">
+                             <string>Session exportieren</string>
+                            </property>
+                           </widget>
+                          </item>
+                          <item>
+                           <widget class="QPushButton" name="importSessionButton">
+                            <property name="text">
+                             <string>Session importieren</string>
+                            </property>
+                           </widget>
+                          </item>
+                          <item>
+                           <spacer name="sessionManagementButtonsSpacer">
+                            <property name="orientation">
+                             <enum>Qt::Horizontal</enum>
+                            </property>
+                            <property name="sizeHint">
+                             <size>
+                              <width>40</width>
+                              <height>20</height>
+                             </size>
+                            </property>
+                           </spacer>
+                          </item>
+                         </layout>
+                        </item>
+                        <item>
+                         <widget class="QPushButton" name="resetWorkspaceButton">
+                          <property name="text">
+                           <string>Auf Werkseinstellung zurücksetzen</string>
+                          </property>
+                         </widget>
+                        </item>
+                       </layout>
+                      </widget>
                      </item>
                    </layout>
                   </widget>
@@ -192,6 +330,21 @@
          </widget>
          <widget class="QWidget" name="pageAppearance">
           <layout class="QVBoxLayout" name="appearanceLayout">
+             <property name="spacing">
+              <number>8</number>
+             </property>
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
            <item>
                   <widget class="QLabel" name="appearanceCategoryTitle">
                    <property name="text">
@@ -218,12 +371,32 @@
                      <enum>QFrame::Raised</enum>
                    </property>
                    <layout class="QVBoxLayout" name="appearanceOptionsLayout">
+                    <property name="spacing">
+                     <number>12</number>
+                    </property>
               <item>
-               <widget class="QLabel" name="appearancePlaceholder">
-                <property name="text">
-                 <string>Keine Optionen vorhanden.</string>
-                </property>
-               </widget>
+                   <widget class="QCheckBox" name="showGroupTabCloseIconsCheckBox">
+                  <property name="text">
+                   <string>Close-Icon bei Gruppentabs anzeigen</string>
+                  </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QCheckBox" name="showFileTabCloseIconsCheckBox">
+                  <property name="text">
+                   <string>Close-Icon bei FileTree-Tabs anzeigen</string>
+                  </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QLabel" name="tabCloseHintLabel">
+                  <property name="wordWrap">
+                   <bool>true</bool>
+                  </property>
+                  <property name="text">
+                   <string>Hinweis: Tabs können zusätzlich mit der mittleren Maustaste geschlossen werden (Gruppentabs werden dabei gelöscht).</string>
+                  </property>
+                   </widget>
               </item>
              </layout>
             </widget>
@@ -288,6 +461,21 @@
          </widget>
          <widget class="QWidget" name="pageFileOperations">
           <layout class="QVBoxLayout" name="fileOpsLayout">
+             <property name="spacing">
+              <number>8</number>
+             </property>
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
            <item>
                   <widget class="QLabel" name="fileOpsCategoryTitle">
                    <property name="text">
@@ -314,8 +502,14 @@
                      <enum>QFrame::Raised</enum>
                    </property>
                    <layout class="QVBoxLayout" name="fileOpsOptionsLayout">
+                    <property name="spacing">
+                     <number>12</number>
+                    </property>
               <item>
                    <layout class="QFormLayout" name="fileOpsFormLayout">
+                      <property name="verticalSpacing">
+                    <number>12</number>
+                      </property>
                   <item row="0" column="0">
                    <widget class="QLabel" name="appDoubleClickBehaviorLabel">
                     <property name="text">

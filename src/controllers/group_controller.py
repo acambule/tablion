@@ -1,11 +1,14 @@
 from typing import Optional
+from pathlib import Path
 
 from PySide6.QtCore import QDir
-from PySide6.QtWidgets import QInputDialog, QSizePolicy, QTabWidget, QWidget
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QDialog, QSizePolicy, QTabWidget, QWidget
 
 from debug_log import debug_exception, debug_log
-from localization import ask_yes_no
+from localization import app_tr, ask_yes_no
 from models.editor_settings import EditorSettings
+from widgets.manage_tab_groups_dialog import ManageTabGroupsDialog
 from widgets.group_workspace_widget import GroupWorkspaceWidget
 
 
@@ -42,6 +45,34 @@ class GroupController:
         pane_controller.navigationStateChanged.connect(self.on_pane_navigation_changed)
         pane_controller.groupRequested.connect(self.on_pane_group_requested)
 
+    def apply_close_icon_settings(self, show_file_tab_close_icons: bool):
+        for pane_controller in self.group_panes_by_page.values():
+            if hasattr(pane_controller, "apply_close_icon_settings"):
+                pane_controller.apply_close_icon_settings(show_file_tab_close_icons)
+
+    def retranslate_panes(self):
+        for pane_controller in self.group_panes_by_page.values():
+            if hasattr(pane_controller, "retranslate_ui_texts"):
+                pane_controller.retranslate_ui_texts()
+
+    def _resolve_group_icon(self, page) -> QIcon:
+        if page is None:
+            return QIcon()
+
+        raw_value = str(page.property("group_icon") or "").strip()
+        if not raw_value:
+            return QIcon()
+
+        theme_icon = QIcon.fromTheme(raw_value)
+        if not theme_icon.isNull():
+            return theme_icon
+
+        candidate = Path(raw_value).expanduser()
+        if candidate.exists():
+            return QIcon(str(candidate))
+
+        return QIcon()
+
     def initialize_existing_groups(self):
         for index in range(self.group_tabs.count()):
             page = self.group_tabs.widget(index)
@@ -68,7 +99,7 @@ class GroupController:
         pane_controller.widget.setParent(None)
         pane_controller.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        tab_title = title if title is not None else f"Gruppe {len(self.visible_group_indices()) + 1}"
+        tab_title = title if title is not None else f"{app_tr('GroupController', 'Gruppe')} {len(self.visible_group_indices()) + 1}"
         index = self.group_tabs.addTab(page, tab_title)
         self.group_panes_by_page[page] = pane_controller
         self._connect_pane_signals(pane_controller)
@@ -89,11 +120,11 @@ class GroupController:
             return
 
         if confirm:
-            group_name = self.group_tabs.tabText(index).strip() or f"Gruppe {index}"
+            group_name = self.group_tabs.tabText(index).strip() or f"{app_tr('GroupController', 'Gruppe')} {index}"
             confirmed = ask_yes_no(
                 self.host_ui,
-                "Gruppe löschen",
-                f"Soll die Gruppe '{group_name}' wirklich gelöscht werden?",
+                app_tr("GroupController", "Gruppe löschen"),
+                app_tr("GroupController", "Soll die Gruppe '{group_name}' wirklich gelöscht werden?").format(group_name=group_name),
                 default_no=True,
             )
             if not confirmed:
@@ -102,7 +133,9 @@ class GroupController:
         page = self.group_tabs.widget(index)
         pane_controller = self.group_panes_by_page.pop(page, None)
         if pane_controller:
-            pane_controller.widget.setParent(None)
+            if hasattr(pane_controller, "prepare_for_dispose"):
+                pane_controller.prepare_for_dispose()
+            pane_controller.widget.setVisible(False)
             pane_controller.deleteLater()
 
         self.group_tabs.removeTab(index)
@@ -119,7 +152,9 @@ class GroupController:
             page = self.group_tabs.widget(index)
             pane_controller = self.group_panes_by_page.pop(page, None)
             if pane_controller:
-                pane_controller.widget.setParent(None)
+                if hasattr(pane_controller, "prepare_for_dispose"):
+                    pane_controller.prepare_for_dispose()
+                pane_controller.widget.setVisible(False)
                 pane_controller.deleteLater()
             self.group_tabs.removeTab(index)
             page.deleteLater()
@@ -132,38 +167,46 @@ class GroupController:
                 debug_log("GroupController.rename_group aborted due to invalid index")
                 return
 
-            current_name = self.group_tabs.tabText(index).strip() or f"Gruppe {index}"
-            debug_log(f"GroupController.rename_group opening input dialog for current_name={current_name}")
-            clean_name, accepted = QInputDialog.getText(
-                self.host_ui,
-                "Gruppe umbenennen",
-                "Name:",
-                text=current_name,
-            )
-            debug_log(f"GroupController.rename_group input dialog accepted={accepted}")
-            if not accepted:
+            current_name = self.group_tabs.tabText(index).strip() or f"{app_tr('GroupController', 'Gruppe')} {index}"
+            page = self.group_tabs.widget(index)
+            current_icon = ""
+            if page is not None:
+                current_icon = str(page.property("group_icon") or "").strip()
+
+            debug_log(f"GroupController.rename_group opening manageTabGoups dialog for current_name={current_name}")
+            dialog = ManageTabGroupsDialog(None, current_name, current_icon)
+            result = dialog.exec()
+            debug_log(f"GroupController.rename_group manageTabGoups result={result}")
+            if result != QDialog.DialogCode.Accepted:
                 return
 
-            clean_name = str(clean_name).strip()
+            clean_name = dialog.group_name()
             if not clean_name:
                 return
+
+            selected_icon = dialog.icon_value()
 
             if index <= 0 or index >= self.group_tabs.count():
                 debug_log("GroupController.rename_group aborted after dialog due to invalid index")
                 return
             self.group_tabs.setTabText(index, clean_name)
+            page = self.group_tabs.widget(index)
+            if page is not None:
+                page.setProperty("group_icon", selected_icon)
+                self.group_tabs.setTabIcon(index, self._resolve_group_icon(page))
             debug_log(f"GroupController.rename_group success index={index}, new_name={clean_name}")
         except RuntimeError:
             debug_log("GroupController.rename_group caught RuntimeError")
             return
         except Exception as error:
             debug_exception("GroupController.rename_group failed", error)
-            raise
+            return
 
     def refresh_group_tabs_presentation(self):
         tab_bar = self.group_tabs.tabBar()
         if self.group_tabs.count() > 0:
-            self.group_tabs.setTabText(0, "Gruppe 0")
+            self.group_tabs.setTabText(0, f"{app_tr('GroupController', 'Gruppe')} 0")
+            self.group_tabs.setTabIcon(0, QIcon())
             tab_bar.setTabVisible(0, False)
 
         visible_groups = self.visible_group_indices()
@@ -180,7 +223,9 @@ class GroupController:
         for group_number, index in enumerate(visible_groups, start=1):
             text = self.group_tabs.tabText(index).strip()
             if not text:
-                self.group_tabs.setTabText(index, f"Gruppe {group_number}")
+                self.group_tabs.setTabText(index, f"{app_tr('GroupController', 'Gruppe')} {group_number}")
+            page = self.group_tabs.widget(index)
+            self.group_tabs.setTabIcon(index, self._resolve_group_icon(page))
 
     def visible_group_indices(self):
         return list(range(1, self.group_tabs.count()))

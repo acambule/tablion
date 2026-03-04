@@ -8,9 +8,10 @@ from urllib.parse import unquote
 from PySide6.QtCore import QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex, QProcess
 from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QDesktopServices, QIcon, QDrag, QKeySequence, QPen
 from PySide6.QtUiTools import QUiLoader
-from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QHBoxLayout, QListView, QMenu, QMessageBox, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QWidget
+from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QHBoxLayout, QListView, QMenu, QMessageBox, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QWidget, QRubberBand
 
-from localization import ask_yes_no
+from localization import app_tr, ask_yes_no
+from debug_log import debug_log
 from controllers.view_adapters import IconViewAdapter, TreeViewAdapter
 from models.file_operations import FileOperations
 from widgets.path_bar import PathBar
@@ -92,6 +93,45 @@ class PaneController(QObject):
     operationFeedback = Signal(str)
     _CLIPBOARD_MIME_TYPE = "application/x-tablion-copy-paths"
     _CLIPBOARD_OPERATION_MIME_TYPE = "application/x-tablion-clipboard-operation"
+    _INTERNAL_DRAG_MIME_TYPE = "application/x-tablion-internal-paths"
+
+    def prepare_for_dispose(self):
+        if self._selection_rubber_band is not None:
+            try:
+                self._selection_rubber_band.hide()
+            except RuntimeError:
+                pass
+        self._selection_rubber_origin = None
+        self._selection_rubber_viewport = None
+
+        for view in (self.tree_view, self.icon_view):
+            if view is None:
+                continue
+            try:
+                view.removeEventFilter(self)
+            except RuntimeError:
+                pass
+
+            try:
+                viewport = view.viewport()
+            except RuntimeError:
+                viewport = None
+            if viewport is not None:
+                try:
+                    viewport.removeEventFilter(self)
+                except RuntimeError:
+                    pass
+
+        if self.tab_bar is not None:
+            try:
+                self.tab_bar.removeEventFilter(self)
+            except RuntimeError:
+                pass
+
+        try:
+            QApplication.clipboard().dataChanged.disconnect(self.on_clipboard_data_changed)
+        except (TypeError, RuntimeError):
+            pass
 
     def __init__(self, file_system_model, parent=None, editor_settings=None):
         super().__init__(parent)
@@ -108,6 +148,7 @@ class PaneController(QObject):
         self.btn_view_mode = None
         self.view_mode_actions = {}
         self.view_mode_icons = {}
+        self._action_reset_view = None
         self._editor_settings = editor_settings
         self.tab_states: list[TabState] = []
         self.active_tab_index = -1
@@ -131,6 +172,9 @@ class PaneController(QObject):
         self._cut_paths: set[str] = set()
         self.tree_view_adapter = None
         self.icon_view_adapter = None
+        self._selection_rubber_band = None
+        self._selection_rubber_origin = None
+        self._selection_rubber_viewport = None
 
         self.tab_bar_host = self.widget.findChild(QWidget, "tabBarHost")
         self.tab_bar = None
@@ -168,9 +212,12 @@ class PaneController(QObject):
     def setup_tree_view(self):
         self.tree_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.tree_view.setModel(self.model)
+        self._apply_tree_header_translations()
         self.tree_view.setSortingEnabled(True)
         self.tree_view.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.tree_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        if hasattr(self.tree_view, "setSelectionRectVisible"):
+            self.tree_view.setSelectionRectVisible(True)
         self.tree_view.setEditTriggers(
             QAbstractItemView.EditTrigger.SelectedClicked
             | QAbstractItemView.EditTrigger.EditKeyPressed
@@ -269,6 +316,8 @@ class PaneController(QObject):
         self.icon_view.setWordWrap(True)
         self.icon_view.setSpacing(10)
         self.icon_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        if hasattr(self.icon_view, "setSelectionRectVisible"):
+            self.icon_view.setSelectionRectVisible(True)
         self.icon_view.setEditTriggers(
             QAbstractItemView.EditTrigger.SelectedClicked
             | QAbstractItemView.EditTrigger.EditKeyPressed
@@ -381,7 +430,7 @@ class PaneController(QObject):
         self.btn_view_mode.setIcon(icon)
         self.btn_view_mode.setIconSize(QSize(22, 22))
         self.btn_view_mode.setText("")
-        self.btn_view_mode.setToolTip("Ansicht")
+        self.btn_view_mode.setToolTip(app_tr("PaneController", "Ansicht"))
         self.btn_view_mode.setAutoRaise(True)
         self.btn_view_mode.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.btn_view_mode.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -395,7 +444,7 @@ class PaneController(QObject):
         details_icon = QIcon.fromTheme("view-list-details")
         if details_icon.isNull():
             details_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
-        details_action = menu.addAction(details_icon, "Details")
+        details_action = menu.addAction(details_icon, app_tr("PaneController", "Details"))
         details_action.setData("details")
         details_action.setCheckable(True)
         details_action.setChecked(True)
@@ -404,7 +453,7 @@ class PaneController(QObject):
         list_icon = QIcon.fromTheme("view-list-text")
         if list_icon.isNull():
             list_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView)
-        list_action = menu.addAction(list_icon, "Liste")
+        list_action = menu.addAction(list_icon, app_tr("PaneController", "Liste"))
         list_action.setData("list")
         list_action.setCheckable(True)
         action_group.addAction(list_action)
@@ -412,7 +461,7 @@ class PaneController(QObject):
         icons_icon = QIcon.fromTheme("view-grid")
         if icons_icon.isNull():
             icons_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
-        icons_action = menu.addAction(icons_icon, "Icons")
+        icons_action = menu.addAction(icons_icon, app_tr("PaneController", "Icons"))
         icons_action.setData("icons")
         icons_action.setCheckable(True)
         action_group.addAction(icons_action)
@@ -421,7 +470,8 @@ class PaneController(QObject):
         reset_icon = QIcon.fromTheme("view-refresh")
         if reset_icon.isNull():
             reset_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
-        action_reset_view = menu.addAction(reset_icon, "Standard")
+        action_reset_view = menu.addAction(reset_icon, app_tr("PaneController", "Standard"))
+        self._action_reset_view = action_reset_view
 
         self.view_mode_actions = {
             "details": details_action,
@@ -437,13 +487,52 @@ class PaneController(QObject):
         action_group.triggered.connect(lambda action: self.apply_view_mode(str(action.data())))
         action_reset_view.triggered.connect(self.reset_view_to_default)
 
+    def _apply_tree_header_translations(self):
+        if self.model is None:
+            return
+        self.model.setHeaderData(0, Qt.Orientation.Horizontal, app_tr("PaneController", "Name"))
+        self.model.setHeaderData(1, Qt.Orientation.Horizontal, app_tr("PaneController", "Größe"))
+        self.model.setHeaderData(2, Qt.Orientation.Horizontal, app_tr("PaneController", "Typ"))
+        self.model.setHeaderData(3, Qt.Orientation.Horizontal, app_tr("PaneController", "Geändert"))
+
+    def retranslate_ui_texts(self):
+        if self.btn_view_mode is not None:
+            self.btn_view_mode.setToolTip(app_tr("PaneController", "Ansicht"))
+
+        details_action = self.view_mode_actions.get("details")
+        if details_action is not None:
+            details_action.setText(app_tr("PaneController", "Details"))
+        list_action = self.view_mode_actions.get("list")
+        if list_action is not None:
+            list_action.setText(app_tr("PaneController", "Liste"))
+        icons_action = self.view_mode_actions.get("icons")
+        if icons_action is not None:
+            icons_action.setText(app_tr("PaneController", "Icons"))
+        if self._action_reset_view is not None:
+            self._action_reset_view.setText(app_tr("PaneController", "Standard"))
+
+        self._apply_tree_header_translations()
+        self.optimize_columns()
+
     def setup_tab_bar(self):
         self.tab_bar.setMovable(True)
         self.tab_bar.setExpanding(False)
-        self.tab_bar.setTabsClosable(False)
+        self.tab_bar.tabCloseRequested.connect(self.close_tab)
+        self.set_show_tab_close_icons(bool(getattr(self._editor_settings, "show_file_tab_close_icons", False)))
         self.tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
         self.tab_bar.currentChanged.connect(self.on_tab_changed)
         self.tab_bar.installEventFilter(self)
+
+    def set_show_tab_close_icons(self, enabled: bool):
+        self.tab_bar.setTabsClosable(bool(enabled))
+        self.tab_bar.setStyleSheet(
+            "QTabBar::close-button {"
+            " subcontrol-position: right;"
+            " margin-left: 8px;"
+            " width: 12px;"
+            " height: 12px;"
+            "}"
+        )
 
     def _tab_menu_icon(self, theme_name, fallback_pixmap):
         icon = QIcon.fromTheme(theme_name)
@@ -461,6 +550,15 @@ class PaneController(QObject):
             self.active_tab_index = index
             self.tab_bar.setCurrentIndex(index)
             self.apply_tab_state(state, push_history=False)
+
+    def open_path_in_new_tab(self, path):
+        target_path = QDir.cleanPath(str(path or ""))
+        if not target_path or not QDir(target_path).exists():
+            return
+
+        new_index = len(self.tab_states) + 1
+        self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", target_path)
+        self.tab_bar.setCurrentIndex(len(self.tab_states) - 1)
 
     def close_tab(self, index):
         if len(self.tab_states) <= 1:
@@ -514,7 +612,7 @@ class PaneController(QObject):
                 tab_index = self.tab_bar.tabAt(event.position().toPoint())
                 if tab_index == -1:
                     new_index = len(self.tab_states) + 1
-                    self.add_tab(f"Tab {new_index}", self.current_directory)
+                    self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", self.current_directory)
                     self.tab_bar.setCurrentIndex(len(self.tab_states) - 1)
                     return True
                 self.toggle_tab_pin(tab_index)
@@ -537,11 +635,11 @@ class PaneController(QObject):
                 menu = QMenu(self.tab_bar)
                 action_new_tab = menu.addAction(
                     self._tab_menu_icon("tab-new", QStyle.StandardPixmap.SP_FileIcon),
-                    "Neuer Tab",
+                    app_tr("PaneController", "Neuer Tab"),
                 )
                 action_close = menu.addAction(
                     self._tab_menu_icon("window-close", QStyle.StandardPixmap.SP_DialogCloseButton),
-                    "Tab schließen",
+                    app_tr("PaneController", "Tab schließen"),
                 )
                 action_close.setEnabled(
                     tab_index != -1
@@ -554,13 +652,13 @@ class PaneController(QObject):
                     menu.addSeparator()
                     action_group = menu.addAction(
                         self._tab_menu_icon("view-split-left-right", QStyle.StandardPixmap.SP_ComputerIcon),
-                        "Gruppieren",
+                        app_tr("PaneController", "Gruppieren"),
                     )
 
                 chosen_action = menu.exec(event.globalPos())
                 if chosen_action == action_new_tab:
                     new_index = len(self.tab_states) + 1
-                    self.add_tab(f"Tab {new_index}", self.current_directory)
+                    self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", self.current_directory)
                     self.tab_bar.setCurrentIndex(len(self.tab_states) - 1)
                     return True
                 if chosen_action == action_close and tab_index != -1:
@@ -572,7 +670,10 @@ class PaneController(QObject):
                 return True
 
         watched_views = tuple(view for view in (self.tree_view, self.icon_view) if view is not None)
-        watched_viewports = tuple(view.viewport() for view in watched_views)
+        try:
+            watched_viewports = tuple(view.viewport() for view in watched_views)
+        except RuntimeError:
+            return False
 
         if watched in watched_views:
             if event.type() == QEvent.Type.KeyPress:
@@ -615,7 +716,16 @@ class PaneController(QObject):
                     return True
 
         if watched in watched_viewports:
-            watched_view = next((view for view in watched_views if view.viewport() is watched), self.active_item_view())
+            watched_view = self.active_item_view()
+            for view in watched_views:
+                try:
+                    if view.viewport() is watched:
+                        watched_view = view
+                        break
+                except RuntimeError:
+                    continue
+            if watched_view is None:
+                return False
             if event.type() == QEvent.Type.KeyPress:
                 if event.key() == Qt.Key.Key_Delete:
                     permanent_delete = True if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) else None
@@ -666,10 +776,48 @@ class PaneController(QObject):
 
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 index = watched_view.indexAt(event.position().toPoint())
-                if not index.isValid():
+                selection_model = watched_view.selectionModel()
+                is_selected_index = bool(selection_model is not None and index.isValid() and selection_model.isSelected(index))
+                if not index.isValid() or not is_selected_index:
                     watched_view.clearSelection()
                     watched_view.setCurrentIndex(QModelIndex())
-                    return True
+                    self._selection_rubber_origin = event.position().toPoint()
+                    self._selection_rubber_viewport = watched_view.viewport()
+                    if self._selection_rubber_band is None:
+                        self._selection_rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, watched_view.viewport())
+                        self._selection_rubber_band.setStyleSheet(
+                            "QRubberBand {"
+                            " border: 1px solid rgba(140, 210, 255, 220);"
+                            " background-color: rgba(80, 170, 230, 56);"
+                            "}"
+                        )
+                    elif self._selection_rubber_band.parent() is not watched_view.viewport():
+                        self._selection_rubber_band.setParent(watched_view.viewport())
+                        self._selection_rubber_band.setStyleSheet(
+                            "QRubberBand {"
+                            " border: 1px solid rgba(140, 210, 255, 220);"
+                            " background-color: rgba(80, 170, 230, 56);"
+                            "}"
+                        )
+                    self._selection_rubber_band.setGeometry(QRect(self._selection_rubber_origin, QSize()))
+                    self._selection_rubber_band.raise_()
+                    self._selection_rubber_band.show()
+                    return False
+
+            if event.type() == QEvent.Type.MouseMove and (event.buttons() & Qt.MouseButton.LeftButton):
+                if (
+                    self._selection_rubber_band is not None
+                    and self._selection_rubber_origin is not None
+                    and self._selection_rubber_viewport is watched_view.viewport()
+                ):
+                    rubber_rect = QRect(self._selection_rubber_origin, event.position().toPoint()).normalized()
+                    self._selection_rubber_band.setGeometry(rubber_rect)
+
+            if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                if self._selection_rubber_band is not None:
+                    self._selection_rubber_band.hide()
+                self._selection_rubber_origin = None
+                self._selection_rubber_viewport = None
 
             if event.type() == QEvent.Type.DragEnter:
                 source_paths, target_dir = self.resolve_drop_context(
@@ -714,6 +862,10 @@ class PaneController(QObject):
 
             if event.type() == QEvent.Type.DragLeave:
                 self.clear_drop_target_visual()
+                if self._selection_rubber_band is not None:
+                    self._selection_rubber_band.hide()
+                self._selection_rubber_origin = None
+                self._selection_rubber_viewport = None
                 return True
 
             if event.type() == QEvent.Type.Drop:
@@ -734,6 +886,10 @@ class PaneController(QObject):
                     target_dir=target_dir,
                 ):
                     self.clear_drop_target_visual()
+                    if self._selection_rubber_band is not None:
+                        self._selection_rubber_band.hide()
+                    self._selection_rubber_origin = None
+                    self._selection_rubber_viewport = None
                     event.acceptProposedAction()
                     return True
                 self.clear_drop_target_visual()
@@ -857,7 +1013,9 @@ class PaneController(QObject):
         mime_data.setData(self._CLIPBOARD_OPERATION_MIME_TYPE, b"copy")
         QApplication.clipboard().setMimeData(mime_data)
         self.clear_cut_state()
-        self.show_operation_feedback(f"{len(source_paths)} Element(e) kopiert")
+        self.show_operation_feedback(
+            app_tr("PaneController", "{count} Element(e) kopiert").format(count=len(source_paths))
+        )
 
     def cut_selection_to_clipboard(self):
         source_paths = self.selected_paths()
@@ -871,13 +1029,39 @@ class PaneController(QObject):
         QApplication.clipboard().setMimeData(mime_data)
         self._cut_paths = set(source_paths)
         self.update_cut_visual_state()
-        self.show_operation_feedback(f"{len(source_paths)} Element(e) ausgeschnitten")
+        self.show_operation_feedback(
+            app_tr("PaneController", "{count} Element(e) ausgeschnitten").format(count=len(source_paths))
+        )
 
     def extract_paths_from_mime(self, mime_data):
         if mime_data is None:
             return []
 
+        format_list = list(mime_data.formats())
+        has_relevant = any(
+            mime_data.hasFormat(mime_name)
+            for mime_name in (
+                self._INTERNAL_DRAG_MIME_TYPE,
+                self._CLIPBOARD_MIME_TYPE,
+                "text/uri-list",
+            )
+        ) or mime_data.hasUrls()
+        if has_relevant:
+            debug_log(f"DND extract_paths_from_mime: incoming_formats={format_list}")
+
         paths = []
+        if mime_data.hasFormat(self._INTERNAL_DRAG_MIME_TYPE):
+            raw_internal_paths = bytes(mime_data.data(self._INTERNAL_DRAG_MIME_TYPE)).decode("utf-8", errors="ignore")
+            for line in raw_internal_paths.splitlines():
+                candidate = QDir.cleanPath(line.strip())
+                if candidate:
+                    paths.append(candidate)
+            if raw_internal_paths.strip():
+                debug_log(f"DND extract_paths_from_mime: internal_paths={paths[:5]}")
+            unique_paths = list(dict.fromkeys(paths))
+            debug_log(f"DND extract_paths_from_mime: resolved_paths={unique_paths[:5]} count={len(unique_paths)}")
+            return unique_paths
+
         if mime_data.hasFormat(self._CLIPBOARD_MIME_TYPE):
             raw = bytes(mime_data.data(self._CLIPBOARD_MIME_TYPE)).decode("utf-8", errors="ignore")
             try:
@@ -897,8 +1081,28 @@ class PaneController(QObject):
                 path = QDir.cleanPath(url.toLocalFile())
                 if path:
                     paths.append(path)
+            if paths:
+                debug_log(f"DND extract_paths_from_mime: urls_paths={paths[:5]}")
 
-        return list(dict.fromkeys(paths))
+        if mime_data.hasFormat("text/uri-list"):
+            raw_uri_list = bytes(mime_data.data("text/uri-list")).decode("utf-8", errors="ignore")
+            for line in raw_uri_list.splitlines():
+                candidate = line.strip()
+                if not candidate or candidate.startswith("#"):
+                    continue
+                url = QUrl(candidate)
+                if not url.isValid() or not url.isLocalFile():
+                    continue
+                path = QDir.cleanPath(url.toLocalFile())
+                if path:
+                    paths.append(path)
+            if raw_uri_list.strip():
+                debug_log(f"DND extract_paths_from_mime: uri_list_raw={raw_uri_list!r}")
+
+        unique_paths = list(dict.fromkeys(paths))
+        if has_relevant:
+            debug_log(f"DND extract_paths_from_mime: resolved_paths={unique_paths[:5]} count={len(unique_paths)}")
+        return unique_paths
 
     def extract_operation_from_mime(self, mime_data):
         if mime_data is None:
@@ -963,7 +1167,9 @@ class PaneController(QObject):
         self.optimize_columns()
         if changes_applied:
             self.filesystemMutationCommitted.emit()
-            self.show_operation_feedback(f"{len(source_paths)} Element(e) kopiert")
+            self.show_operation_feedback(
+                app_tr("PaneController", "{count} Element(e) kopiert").format(count=len(source_paths))
+            )
 
     def build_next_duplicate_path(self, source_path, target_dir):
         source_name = source_path.name
@@ -1008,7 +1214,9 @@ class PaneController(QObject):
             self.refresh_current_directory(preserve_focus=True)
             self.filesystemMutationCommitted.emit()
             self.optimize_columns()
-            self.show_operation_feedback(f"{len(source_paths)} Element(e) dupliziert")
+            self.show_operation_feedback(
+                app_tr("PaneController", "{count} Element(e) dupliziert").format(count=len(source_paths))
+            )
 
         return changes_applied
 
@@ -1043,7 +1251,9 @@ class PaneController(QObject):
         if changes_applied:
             self.refresh_current_directory(preserve_focus=True)
             self.filesystemMutationCommitted.emit()
-            self.show_operation_feedback(f"{len(source_paths)} Element(e) verschoben")
+            self.show_operation_feedback(
+                app_tr("PaneController", "{count} Element(e) verschoben").format(count=len(source_paths))
+            )
         return changes_applied
 
     def link_paths_to_directory(self, source_paths, target_directory):
@@ -1074,7 +1284,9 @@ class PaneController(QObject):
         if changes_applied:
             self.refresh_current_directory()
             self.filesystemMutationCommitted.emit()
-            self.show_operation_feedback(f"{len(source_paths)} Verknüpfung(en) erstellt")
+            self.show_operation_feedback(
+                app_tr("PaneController", "{count} Verknüpfung(en) erstellt").format(count=len(source_paths))
+            )
         return changes_applied
 
     def is_trash_context(self):
@@ -1104,7 +1316,7 @@ class PaneController(QObject):
         existing_selected = [target for target in selected if Path(QDir.cleanPath(target)).exists()]
         if not existing_selected:
             self.refresh_current_directory(preserve_focus=True)
-            self.show_operation_feedback("Element bereits entfernt")
+            self.show_operation_feedback(app_tr("PaneController", "Element bereits entfernt"))
             return
 
         if permanent is None:
@@ -1113,18 +1325,18 @@ class PaneController(QObject):
         if len(existing_selected) == 1:
             target_label = Path(existing_selected[0]).name or existing_selected[0]
             if permanent:
-                message = f"'{target_label}' dauerhaft löschen?"
+                message = app_tr("PaneController", "'{target}' dauerhaft löschen?").format(target=target_label)
             else:
-                message = f"'{target_label}' in den Papierkorb verschieben?"
+                message = app_tr("PaneController", "'{target}' in den Papierkorb verschieben?").format(target=target_label)
         else:
             if permanent:
-                message = f"{len(existing_selected)} Elemente dauerhaft löschen?"
+                message = app_tr("PaneController", "{count} Elemente dauerhaft löschen?").format(count=len(existing_selected))
             else:
-                message = f"{len(existing_selected)} Elemente in den Papierkorb verschieben?"
+                message = app_tr("PaneController", "{count} Elemente in den Papierkorb verschieben?").format(count=len(existing_selected))
 
         confirmed = ask_yes_no(
             self.widget,
-            "Dauerhaft löschen" if permanent else "In den Papierkorb verschieben",
+            app_tr("PaneController", "Dauerhaft löschen") if permanent else app_tr("PaneController", "In den Papierkorb verschieben"),
             message,
             default_no=True,
         )
@@ -1156,13 +1368,22 @@ class PaneController(QObject):
 
             self.refresh_current_directory()
             self.filesystemMutationCommitted.emit()
-            action_text = "dauerhaft gelöscht" if permanent else "in den Papierkorb verschoben"
-            self.show_operation_feedback(f"{len(existing_selected)} Element(e) {action_text}")
+            action_text = (
+                app_tr("PaneController", "dauerhaft gelöscht")
+                if permanent
+                else app_tr("PaneController", "in den Papierkorb verschoben")
+            )
+            self.show_operation_feedback(
+                app_tr("PaneController", "{count} Element(e) {action}").format(
+                    count=len(existing_selected),
+                    action=action_text,
+                )
+            )
 
         if delete_errors:
             QMessageBox.warning(
                 self.widget,
-                "Löschen fehlgeschlagen",
+                app_tr("PaneController", "Löschen fehlgeschlagen"),
                 delete_errors[0],
             )
 
@@ -1199,17 +1420,19 @@ class PaneController(QObject):
         if target.is_file():
             stem = target.stem
             suffix = target.suffix
-            candidate = target.with_name(f"{stem} - Wiederhergestellt{suffix}")
+            restored_suffix = app_tr("PaneController", "Wiederhergestellt")
+            candidate = target.with_name(f"{stem} - {restored_suffix}{suffix}")
             counter = 2
             while candidate.exists():
-                candidate = target.with_name(f"{stem} - Wiederhergestellt {counter}{suffix}")
+                candidate = target.with_name(f"{stem} - {restored_suffix} {counter}{suffix}")
                 counter += 1
             return candidate
 
-        candidate = target.with_name(f"{target.name} - Wiederhergestellt")
+        restored_suffix = app_tr("PaneController", "Wiederhergestellt")
+        candidate = target.with_name(f"{target.name} - {restored_suffix}")
         counter = 2
         while candidate.exists():
-            candidate = target.with_name(f"{target.name} - Wiederhergestellt {counter}")
+            candidate = target.with_name(f"{target.name} - {restored_suffix} {counter}")
             counter += 1
         return candidate
 
@@ -1227,7 +1450,11 @@ class PaneController(QObject):
 
             original_path = self._read_trash_original_path(trashed_path)
             if original_path is None:
-                restore_errors.append(f"Wiederherstellen fehlgeschlagen: Metadaten fehlen für '{trashed_path.name}'.")
+                restore_errors.append(
+                    app_tr("PaneController", "Wiederherstellen fehlgeschlagen: Metadaten fehlen für '{name}'.").format(
+                        name=trashed_path.name
+                    )
+                )
                 continue
 
             restore_target = self._build_restore_target(original_path)
@@ -1241,17 +1468,24 @@ class PaneController(QObject):
                         pass
                 restored_count += 1
             except (FileExistsError, FileNotFoundError, OSError, ValueError) as error:
-                restore_errors.append(f"Wiederherstellen fehlgeschlagen für '{trashed_path.name}': {error}")
+                restore_errors.append(
+                    app_tr("PaneController", "Wiederherstellen fehlgeschlagen für '{name}': {error}").format(
+                        name=trashed_path.name,
+                        error=error,
+                    )
+                )
 
         if restored_count > 0:
             self.refresh_current_directory(preserve_focus=True)
             self.filesystemMutationCommitted.emit()
-            self.show_operation_feedback(f"{restored_count} Element(e) wiederhergestellt")
+            self.show_operation_feedback(
+                app_tr("PaneController", "{count} Element(e) wiederhergestellt").format(count=restored_count)
+            )
 
         if restore_errors:
             QMessageBox.warning(
                 self.widget,
-                "Wiederherstellen fehlgeschlagen",
+                app_tr("PaneController", "Wiederherstellen fehlgeschlagen"),
                 restore_errors[0],
             )
 
@@ -1273,10 +1507,12 @@ class PaneController(QObject):
 
         self.copy_paths_to_directory(source_paths, destination)
 
-    def create_folder(self, target_directory=None, base_name="Neuer Ordner"):
+    def create_folder(self, target_directory=None, base_name=None):
         destination = QDir.cleanPath(target_directory or self.resolve_drop_target_directory())
         if not QDir(destination).exists():
             return None
+
+        base_name = (base_name or app_tr("PaneController", "Neuer Ordner")).strip()
 
         candidate = Path(destination) / base_name
         suffix = 2
@@ -1291,7 +1527,7 @@ class PaneController(QObject):
 
         self._pending_created_item_path = QDir.cleanPath(str(candidate))
         self.filesystemMutationCommitted.emit()
-        self.show_operation_feedback("Ordner erstellt")
+        self.show_operation_feedback(app_tr("PaneController", "Ordner erstellt"))
 
         new_index = self.model.index(str(candidate))
         if new_index.isValid():
@@ -1317,12 +1553,14 @@ class PaneController(QObject):
         QTimer.singleShot(150, select_later)
         return candidate
 
-    def create_file(self, target_directory=None, base_name="Neue Datei.txt"):
+    def create_file(self, target_directory=None, base_name=None):
         destination = QDir.cleanPath(target_directory or self.resolve_drop_target_directory())
         if not QDir(destination).exists():
             return None
 
-        base_stem = Path(base_name).stem or "Neue Datei"
+        base_name = (base_name or app_tr("PaneController", "Neue Datei.txt")).strip()
+
+        base_stem = Path(base_name).stem or app_tr("PaneController", "Neue Datei")
         suffix = Path(base_name).suffix or ".txt"
         candidate = Path(destination) / f"{base_stem}{suffix}"
         counter = 2
@@ -1337,7 +1575,7 @@ class PaneController(QObject):
 
         self._pending_created_item_path = QDir.cleanPath(str(candidate))
         self.filesystemMutationCommitted.emit()
-        self.show_operation_feedback("Datei erstellt")
+        self.show_operation_feedback(app_tr("PaneController", "Datei erstellt"))
 
         new_index = self.model.index(str(candidate))
         if new_index.isValid():
@@ -1542,14 +1780,14 @@ class PaneController(QObject):
             delete_icon = QIcon.fromTheme("edit-delete")
             if delete_icon.isNull():
                 delete_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
-            action_delete = menu.addAction(delete_icon, "Löschen")
+            action_delete = menu.addAction(delete_icon, app_tr("PaneController", "Löschen"))
             action_delete.setShortcut(QKeySequence(Qt.Key.Key_Delete))
             action_delete.setShortcutVisibleInContextMenu(True)
 
             restore_icon = QIcon.fromTheme("edit-undo")
             if restore_icon.isNull():
                 restore_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack)
-            action_restore = menu.addAction(restore_icon, "Wiederherstellen")
+            action_restore = menu.addAction(restore_icon, app_tr("PaneController", "Wiederherstellen"))
 
             has_selection = bool(self.selected_paths())
             action_delete.setEnabled(has_selection)
@@ -1567,7 +1805,7 @@ class PaneController(QObject):
         new_folder_icon = QIcon.fromTheme("folder-new")
         if new_folder_icon.isNull():
             new_folder_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder)
-        action_new_folder = menu.addAction(new_folder_icon, "Neuer Ordner")
+        action_new_folder = menu.addAction(new_folder_icon, app_tr("PaneController", "Neuer Ordner"))
         action_new_folder.setShortcut(QKeySequence("Ctrl+Shift+N"))
         action_new_folder.setShortcutVisibleInContextMenu(True)
         destination_dir = self.resolve_drop_target_directory(pos, source_view=source_view)
@@ -1576,7 +1814,7 @@ class PaneController(QObject):
         new_file_icon = QIcon.fromTheme("document-new")
         if new_file_icon.isNull():
             new_file_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
-        action_new_file = menu.addAction(new_file_icon, "Neue Datei")
+        action_new_file = menu.addAction(new_file_icon, app_tr("PaneController", "Neue Datei"))
         action_new_file.setShortcut(QKeySequence("Ctrl+N"))
         action_new_file.setShortcutVisibleInContextMenu(True)
         action_new_file.setEnabled(QDir(destination_dir).exists())
@@ -1586,21 +1824,21 @@ class PaneController(QObject):
         duplicate_icon = QIcon.fromTheme("edit-copy")
         if duplicate_icon.isNull():
             duplicate_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
-        action_duplicate = menu.addAction(duplicate_icon, "Duplizieren")
+        action_duplicate = menu.addAction(duplicate_icon, app_tr("PaneController", "Duplizieren"))
         action_duplicate.setShortcut(QKeySequence("Ctrl+D"))
         action_duplicate.setShortcutVisibleInContextMenu(True)
 
         copy_icon = QIcon.fromTheme("edit-copy")
         if copy_icon.isNull():
             copy_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
-        action_copy = menu.addAction(copy_icon, "Kopieren")
+        action_copy = menu.addAction(copy_icon, app_tr("PaneController", "Kopieren"))
         action_copy.setShortcut(QKeySequence.StandardKey.Copy)
         action_copy.setShortcutVisibleInContextMenu(True)
 
         cut_icon = QIcon.fromTheme("edit-cut")
         if cut_icon.isNull():
             cut_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight)
-        action_cut = menu.addAction(cut_icon, "Ausschneiden")
+        action_cut = menu.addAction(cut_icon, app_tr("PaneController", "Ausschneiden"))
         action_cut.setShortcut(QKeySequence.StandardKey.Cut)
         action_cut.setShortcutVisibleInContextMenu(True)
 
@@ -1614,7 +1852,7 @@ class PaneController(QObject):
         paste_icon = QIcon.fromTheme("edit-paste")
         if paste_icon.isNull():
             paste_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
-        action_paste = menu.addAction(paste_icon, "Einfügen")
+        action_paste = menu.addAction(paste_icon, app_tr("PaneController", "Einfügen"))
         action_paste.setShortcut(QKeySequence.StandardKey.Paste)
         action_paste.setShortcutVisibleInContextMenu(True)
 
@@ -1623,20 +1861,20 @@ class PaneController(QObject):
         edit_icon = QIcon.fromTheme("accessories-text-editor")
         if edit_icon.isNull():
             edit_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
-        action_edit = menu.addAction(edit_icon, "Bearbeiten")
+        action_edit = menu.addAction(edit_icon, app_tr("PaneController", "Bearbeiten"))
         action_edit.setEnabled(self._is_editable_selection())
 
         rename_icon = QIcon.fromTheme("edit-rename")
         if rename_icon.isNull():
             rename_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
-        action_rename = menu.addAction(rename_icon, "Umbenennen")
+        action_rename = menu.addAction(rename_icon, app_tr("PaneController", "Umbenennen"))
         action_rename.setShortcut(QKeySequence(Qt.Key.Key_F2))
         action_rename.setShortcutVisibleInContextMenu(True)
 
         delete_icon = QIcon.fromTheme("edit-delete")
         if delete_icon.isNull():
             delete_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
-        action_delete = menu.addAction(delete_icon, "Löschen")
+        action_delete = menu.addAction(delete_icon, app_tr("PaneController", "Löschen"))
         action_delete.setShortcut(QKeySequence(Qt.Key.Key_Delete))
         action_delete.setShortcutVisibleInContextMenu(True)
         action_delete.setEnabled(bool(self.selected_paths()))
@@ -1646,7 +1884,7 @@ class PaneController(QObject):
         refresh_icon = QIcon.fromTheme("view-refresh")
         if refresh_icon.isNull():
             refresh_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
-        action_refresh = menu.addAction(refresh_icon, "Aktualisieren")
+        action_refresh = menu.addAction(refresh_icon, app_tr("PaneController", "Aktualisieren"))
         action_refresh.setShortcut(QKeySequence(Qt.Key.Key_F5))
         action_refresh.setShortcutVisibleInContextMenu(True)
 
@@ -1698,7 +1936,9 @@ class PaneController(QObject):
             return
 
         mime_data = QMimeData()
-        mime_data.setUrls([QUrl.fromLocalFile(path)])
+        url = QUrl.fromLocalFile(path)
+        encoded_uri = bytes(url.toEncoded()).decode("utf-8")
+        mime_data.setData("text/uri-list", (encoded_uri + "\r\n").encode("utf-8"))
 
         drag = QDrag(self.tab_bar)
         drag.setMimeData(mime_data)

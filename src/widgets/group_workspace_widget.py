@@ -245,6 +245,13 @@ class GroupWorkspaceWidget(QWidget):
         self._panes[slot] = pane
         return pane
 
+    def prepare_for_dispose(self):
+        for pane in self._panes.values():
+            if pane is None:
+                continue
+            if hasattr(pane, "prepare_for_dispose"):
+                pane.prepare_for_dispose()
+
     def set_group_active(self, is_active):
         self._is_active_group = bool(is_active)
         self.refresh_active_highlight()
@@ -262,7 +269,17 @@ class GroupWorkspaceWidget(QWidget):
         self._split_mode = mode
         self._active_slot = "primary"
         self._render()
+
+    def apply_close_icon_settings(self, show_file_tab_close_icons: bool):
+        for pane in self._pane_by_slot().values():
+            if hasattr(pane, "set_show_tab_close_icons"):
+                pane.set_show_tab_close_icons(show_file_tab_close_icons)
         self._emit_active_state()
+
+    def retranslate_ui_texts(self):
+        for pane in self._pane_by_slot().values():
+            if hasattr(pane, "retranslate_ui_texts"):
+                pane.retranslate_ui_texts()
 
     def export_split_state(self):
         payload = {"split_mode": self._split_mode}
@@ -354,6 +371,11 @@ class GroupWorkspaceWidget(QWidget):
         pane = self._active_pane()
         if pane:
             pane.navigate_to(path, push_history=push_history)
+
+    def open_path_in_new_tab(self, path):
+        pane = self._active_pane()
+        if pane and hasattr(pane, "open_path_in_new_tab"):
+            pane.open_path_in_new_tab(path)
 
     def refresh_current_directory(self):
         pane = self._active_pane()

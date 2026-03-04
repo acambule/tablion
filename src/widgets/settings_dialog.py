@@ -3,22 +3,32 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize
+from PySide6.QtCore import Signal
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QLineEdit,
     QStackedWidget,
     QListWidget,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from models.editor_settings import EditorSettings
+from localization import app_tr
 
 
 class SettingsDialog(QDialog):
+    settingsChanged = Signal()
+    languagePreferenceChanged = Signal(str)
+    sessionExportRequested = Signal()
+    sessionImportRequested = Signal()
+    factoryResetRequested = Signal()
+
     def __init__(self, parent: QWidget | None, editor_settings: EditorSettings):
         super().__init__(parent)
         self._editor_settings = editor_settings
@@ -40,10 +50,16 @@ class SettingsDialog(QDialog):
             self.setMinimumSize(QSize(self.ui.size().width(), self.ui.size().height()))
 
         self._default_editor_line_edit = self.ui.findChild(QLineEdit, "defaultEditorLineEdit")
+        self._language_preference_combo = self.ui.findChild(QComboBox, "languagePreferenceCombo")
         self._app_double_click_behavior_combo = self.ui.findChild(QComboBox, "appDoubleClickBehaviorCombo")
+        self._show_group_tab_close_icons_checkbox = self.ui.findChild(QCheckBox, "showGroupTabCloseIconsCheckBox")
+        self._show_file_tab_close_icons_checkbox = self.ui.findChild(QCheckBox, "showFileTabCloseIconsCheckBox")
         self._button_box = self.ui.findChild(QDialogButtonBox, "buttonBox")
         self._categories_list = self.ui.findChild(QListWidget, "categoriesList")
         self._category_stack = self.ui.findChild(QStackedWidget, "categoryStack")
+        self._export_session_button = self.ui.findChild(QPushButton, "exportSessionButton")
+        self._import_session_button = self.ui.findChild(QPushButton, "importSessionButton")
+        self._reset_workspace_button = self.ui.findChild(QPushButton, "resetWorkspaceButton")
 
         if self._categories_list and self._category_stack:
             self._categories_list.currentRowChanged.connect(self._category_stack.setCurrentIndex)
@@ -58,18 +74,52 @@ class SettingsDialog(QDialog):
             behavior = self._editor_settings.application_double_click_behavior
             self._app_double_click_behavior_combo.setCurrentIndex(1 if behavior == "edit" else 0)
 
+        if self._language_preference_combo:
+            language_map = {"system": 0, "de": 1, "en": 2}
+            self._language_preference_combo.setCurrentIndex(language_map.get(self._editor_settings.language_preference, 0))
+
+        if self._show_group_tab_close_icons_checkbox:
+            self._show_group_tab_close_icons_checkbox.setChecked(self._editor_settings.show_group_tab_close_icons)
+
+        if self._show_file_tab_close_icons_checkbox:
+            self._show_file_tab_close_icons_checkbox.setChecked(self._editor_settings.show_file_tab_close_icons)
+
         if self._button_box:
             apply_button = self._button_box.button(QDialogButtonBox.StandardButton.Apply)
+            ok_button = self._button_box.button(QDialogButtonBox.StandardButton.Ok)
+            cancel_button = self._button_box.button(QDialogButtonBox.StandardButton.Cancel)
+            if cancel_button:
+                cancel_button.setText(app_tr("SettingsDialog", "Abbrechen"))
             if apply_button:
+                apply_button.setText(app_tr("SettingsDialog", "Anwenden"))
                 apply_button.clicked.connect(self._on_apply)
+            if ok_button:
+                ok_button.setText(app_tr("SettingsDialog", "OK"))
             self._button_box.accepted.connect(self._on_accepted)
             self._button_box.rejected.connect(self.reject)
 
+        if self._export_session_button:
+            self._export_session_button.clicked.connect(self.sessionExportRequested.emit)
+        if self._import_session_button:
+            self._import_session_button.clicked.connect(self.sessionImportRequested.emit)
+        if self._reset_workspace_button:
+            self._reset_workspace_button.clicked.connect(self.factoryResetRequested.emit)
+
     def _on_apply(self) -> None:
+        old_language = self._editor_settings.language_preference
         self._save_editor_preference()
+        self.settingsChanged.emit()
+        new_language = self._editor_settings.language_preference
+        if new_language != old_language:
+            self.languagePreferenceChanged.emit(new_language)
 
     def _on_accepted(self) -> None:
+        old_language = self._editor_settings.language_preference
         self._save_editor_preference()
+        self.settingsChanged.emit()
+        new_language = self._editor_settings.language_preference
+        if new_language != old_language:
+            self.languagePreferenceChanged.emit(new_language)
         self.accept()
 
     def _save_editor_preference(self) -> None:
@@ -79,3 +129,11 @@ class SettingsDialog(QDialog):
         if self._app_double_click_behavior_combo:
             behavior = "edit" if self._app_double_click_behavior_combo.currentIndex() == 1 else "start"
             self._editor_settings.update_application_double_click_behavior(behavior)
+        if self._language_preference_combo:
+            index = self._language_preference_combo.currentIndex()
+            lang = "system" if index == 0 else ("de" if index == 1 else "en")
+            self._editor_settings.update_language_preference(lang)
+        if self._show_group_tab_close_icons_checkbox:
+            self._editor_settings.update_show_group_tab_close_icons(self._show_group_tab_close_icons_checkbox.isChecked())
+        if self._show_file_tab_close_icons_checkbox:
+            self._editor_settings.update_show_file_tab_close_icons(self._show_file_tab_close_icons_checkbox.isChecked())

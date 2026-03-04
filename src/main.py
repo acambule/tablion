@@ -4,19 +4,22 @@
 
 import sys
 import json
+import copy
 import shutil
 import traceback
+from datetime import datetime
 from pathlib import Path
 from PySide6.QtGui import QAction, QIcon, QKeySequence
-from PySide6.QtWidgets import (QApplication, QMainWindow, QFileSystemModel, QTreeWidget, QSplitter, QWidget, QToolButton, QStyle, QMenu, QTabWidget, QVBoxLayout, QSizePolicy, QMessageBox)
+from PySide6.QtWidgets import (QApplication, QMainWindow, QTreeWidget, QSplitter, QWidget, QToolButton, QStyle, QMenu, QTabWidget, QVBoxLayout, QSizePolicy, QMessageBox, QFileDialog)
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtCore import QDir, QEvent, Qt, QTimer, QStandardPaths
 
 from controllers.group_controller import GroupController
 from debug_log import debug_exception, debug_log, initialize_debug_log
-from localization import setup_localization
+from localization import app_tr, ask_yes_no, apply_localization, setup_localization
 from models.editor_settings import EditorSettings
-from models.navigator import NavigatorManager
+from models.file_system_model import FileSystemModel
+from models.navigator import DEFAULT_NAVIGATOR_DATA, NavigatorManager
 from widgets.settings_dialog import SettingsDialog
 from single_application import SingleApplication
 from widgets.group_workspace_widget import GroupWorkspaceWidget
@@ -68,7 +71,7 @@ class MainWindow(QMainWindow):
             app.aboutToQuit.connect(self.persist_app_state)
             app.focusChanged.connect(self.on_app_focus_changed)
 
-        self.model = QFileSystemModel()
+        self.model = FileSystemModel()
         root_path = QDir.homePath()
         self.model.setRootPath(root_path)
         self.model.setReadOnly(False)
@@ -141,7 +144,7 @@ class MainWindow(QMainWindow):
             self.group_content_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self.group_tabs.setMovable(True)
-        self.group_tabs.setTabsClosable(False)
+        self.group_tabs.tabCloseRequested.connect(self.on_group_tab_close_requested)
         self.group_tabs.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
         self.group_tabs.installEventFilter(self)
         self.group_tabs.tabBar().installEventFilter(self)
@@ -162,6 +165,7 @@ class MainWindow(QMainWindow):
         self.group_controller.initialize_existing_groups()
 
         self.group_tabs.currentChanged.connect(self.on_group_tab_changed)
+        self.apply_tab_close_icon_settings()
         self.group_controller.refresh_group_tabs_presentation()
         self.render_active_group_pane()
 
@@ -314,6 +318,28 @@ class MainWindow(QMainWindow):
         if self.group_controller:
             self.group_controller.close_group(index, confirm=confirm)
 
+    def on_group_tab_close_requested(self, index):
+        if index > 0:
+            self.close_group(index)
+
+    def apply_tab_close_icon_settings(self):
+        show_group = bool(getattr(self.editor_settings, "show_group_tab_close_icons", False)) if self.editor_settings else False
+        show_file = bool(getattr(self.editor_settings, "show_file_tab_close_icons", False)) if self.editor_settings else False
+
+        if self.group_tabs is not None:
+            self.group_tabs.setTabsClosable(show_group)
+            self.group_tabs.tabBar().setStyleSheet(
+                "QTabBar::close-button {"
+                " subcontrol-position: right;"
+                " margin-left: 8px;"
+                " width: 12px;"
+                " height: 12px;"
+                "}"
+            )
+
+        if self.group_controller is not None:
+            self.group_controller.apply_close_icon_settings(show_file)
+
     def clear_visible_groups(self):
         if self.group_controller:
             self.group_controller.clear_visible_groups()
@@ -359,9 +385,9 @@ class MainWindow(QMainWindow):
             target_pane.replace_tabs(moved_states, active_index=active_index)
             self.update_nav_buttons()
 
-    def save_session_state(self):
+    def build_session_payload(self):
         if not self.group_tabs:
-            return
+            return None
 
         group_zero_pane = self.get_group_zero_pane()
         group_zero_state = None
@@ -381,9 +407,14 @@ class MainWindow(QMainWindow):
             if not pane:
                 continue
 
+            group_icon = ""
+            if page is not None:
+                group_icon = str(page.property("group_icon") or "").strip()
+
             groups_payload.append(
                 {
                     "title": self.group_tabs.tabText(index).strip() or f"Gruppe {index}",
+                    "icon": group_icon,
                     "pane": pane.export_state(),
                     **self.export_split_state_for_page(page),
                 }
@@ -409,25 +440,11 @@ class MainWindow(QMainWindow):
         if splitter:
             payload["splitter_sizes"] = splitter.sizes()
 
-        self.session_data_path.parent.mkdir(parents=True, exist_ok=True)
-        self.session_data_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        return payload
 
-    def load_session_state(self):
-        if not self.group_tabs:
-            return
-        if not self.session_data_path.exists():
-            return
-
-        try:
-            payload = json.loads(self.session_data_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
-
+    def apply_session_payload(self, payload):
         if not isinstance(payload, dict):
-            return
+            return False
 
         window_data = payload.get("window")
         if isinstance(window_data, dict):
@@ -492,6 +509,7 @@ class MainWindow(QMainWindow):
                     continue
 
                 title = str(group_data.get("title") or "").strip() or None
+                icon_value = str(group_data.get("icon") or "").strip()
                 pane_data = group_data.get("pane")
                 split_mode = str(group_data.get("split_mode") or "single")
                 secondary_payload = group_data.get("secondary_pane")
@@ -515,6 +533,7 @@ class MainWindow(QMainWindow):
                 if pane:
                     page = self.get_page_for_pane(pane)
                     if page is not None:
+                        page.setProperty("group_icon", icon_value)
                         self.restore_split_state_for_page(
                             page,
                             split_mode,
@@ -537,6 +556,92 @@ class MainWindow(QMainWindow):
         active_pane = self.get_active_pane()
         if active_pane:
             self.update_window_title(active_pane.current_path())
+
+        return True
+
+    def save_session_state(self):
+        payload = self.build_session_payload()
+        if payload is None:
+            return
+
+        self.session_data_path.parent.mkdir(parents=True, exist_ok=True)
+        self.session_data_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def load_session_state(self):
+        if not self.group_tabs:
+            return
+        if not self.session_data_path.exists():
+            return
+
+        try:
+            payload = json.loads(self.session_data_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+
+        self.apply_session_payload(payload)
+
+    def export_session_bundle(self, target_path: Path):
+        session_payload = self.build_session_payload()
+        if session_payload is None:
+            raise RuntimeError("Session konnte nicht erzeugt werden.")
+
+        bundle = {
+            "format": "tablion-session-bundle",
+            "bundle_version": 1,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "session": session_payload,
+            "navigator": self.navigator_manager.serialize() if self.navigator_manager else None,
+        }
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def import_session_bundle(self, source_path: Path):
+        payload = json.loads(source_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Ungültige Datei")
+
+        session_payload = payload.get("session")
+        navigator_payload = payload.get("navigator")
+
+        if not isinstance(session_payload, dict):
+            if isinstance(payload.get("groups"), list) or isinstance(payload.get("group0"), dict):
+                session_payload = payload
+            else:
+                raise ValueError("Keine gültige Session enthalten")
+
+        self.apply_session_payload(session_payload)
+
+        if self.navigator_manager and isinstance(navigator_payload, dict) and isinstance(navigator_payload.get("groups"), list):
+            self.navigator_manager.save_data(navigator_payload)
+            self.navigator_manager.widget.clear()
+            self.navigator_manager.loaded_data = navigator_payload
+            self.navigator_manager.build_from_data(navigator_payload)
+
+    def reset_to_factory_defaults(self):
+        self.clear_visible_groups()
+        self.reset_group_zero_to_default()
+        self.refresh_group_tabs_presentation()
+        self.render_active_group_pane()
+        self.update_nav_buttons()
+
+        active_pane = self.get_active_pane()
+        if active_pane:
+            self.update_window_title(active_pane.current_path())
+
+        if self.navigator_manager:
+            default_nav = copy.deepcopy(DEFAULT_NAVIGATOR_DATA)
+            self.navigator_manager.save_data(default_nav)
+            self.navigator_manager.widget.clear()
+            self.navigator_manager.loaded_data = default_nav
+            self.navigator_manager.build_from_data(default_nav)
+
+        self.save_session_state()
+        if self.navigator_manager:
+            self.navigator_manager.save_current_state()
 
     def on_pane_path_changed(self, path):
         if self.sender() != self.get_active_pane():
@@ -592,19 +697,19 @@ class MainWindow(QMainWindow):
                     menu = QMenu(tab_bar)
                     action_new_group = menu.addAction(
                         self._group_menu_icon("folder-new", QStyle.StandardPixmap.SP_FileDialogNewFolder),
-                        "Neue Gruppe",
+                        app_tr("MainWindow", "Neue Gruppe"),
                     )
                     action_rename_group = None
                     if tab_index > 0:
                         action_rename_group = menu.addAction(
                             self._group_menu_icon("edit-rename", QStyle.StandardPixmap.SP_FileDialogDetailedView),
-                            "Umbenennen",
+                            app_tr("MainWindow", "Umbenennen"),
                         )
                     action_close_group = None
                     if tab_index > 0:
                         action_close_group = menu.addAction(
                             self._group_menu_icon("window-close", QStyle.StandardPixmap.SP_DialogCloseButton),
-                            "Gruppe schließen",
+                            app_tr("MainWindow", "Gruppe schließen"),
                         )
 
                     chosen_action = menu.exec(event.globalPos())
@@ -639,7 +744,7 @@ class MainWindow(QMainWindow):
                 menu_icon = style.standardIcon(QStyle.StandardPixmap.SP_TitleBarMenuButton)
             self.btn_nav_menu.setIcon(menu_icon)
             self.btn_nav_menu.setText("")
-            self.btn_nav_menu.setToolTip("Menü")
+            self.btn_nav_menu.setToolTip(app_tr("MainWindow", "Menü"))
             self.btn_nav_menu.setAutoRaise(True)
             self.btn_nav_menu.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             self.btn_nav_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -648,12 +753,12 @@ class MainWindow(QMainWindow):
             settings_icon = QIcon.fromTheme("preferences-system")
             if settings_icon.isNull():
                 settings_icon = style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
-            action_settings = burger_menu.addAction(settings_icon, "Einstellungen")
+            action_settings = burger_menu.addAction(settings_icon, app_tr("MainWindow", "Einstellungen"))
             action_settings.triggered.connect(self.show_settings_dialog)
             info_icon = QIcon.fromTheme("help-about")
             if info_icon.isNull():
                 info_icon = style.standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
-            action_info = burger_menu.addAction(info_icon, "Über / Info")
+            action_info = burger_menu.addAction(info_icon, app_tr("MainWindow", "Über / Info"))
             action_info.triggered.connect(self.show_about_info)
 
             burger_menu.addSeparator()
@@ -661,7 +766,7 @@ class MainWindow(QMainWindow):
             quit_icon = QIcon.fromTheme("application-exit")
             if quit_icon.isNull():
                 quit_icon = style.standardIcon(QStyle.StandardPixmap.SP_TitleBarCloseButton)
-            action_quit = burger_menu.addAction(quit_icon, "Beenden")
+            action_quit = burger_menu.addAction(quit_icon, app_tr("MainWindow", "Beenden"))
             action_quit.setShortcut(QKeySequence.StandardKey.Quit)
             action_quit.setShortcutVisibleInContextMenu(True)
             action_quit.triggered.connect(self.quit_application)
@@ -676,16 +781,16 @@ class MainWindow(QMainWindow):
 
             self.btn_split_view.setIcon(split_icon)
             self.btn_split_view.setText("")
-            self.btn_split_view.setToolTip("Split-View")
+            self.btn_split_view.setToolTip(app_tr("MainWindow", "Split-View"))
             self.btn_split_view.setAutoRaise(True)
             self.btn_split_view.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             self.btn_split_view.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
 
             split_menu = QMenu(self.btn_split_view)
-            action_split_single = split_menu.addAction("Einzelansicht")
+            action_split_single = split_menu.addAction(app_tr("MainWindow", "Einzelansicht"))
             split_menu.addSeparator()
-            action_split_2 = split_menu.addAction("2-Split")
-            action_split_4 = split_menu.addAction("4-Split")
+            action_split_2 = split_menu.addAction(app_tr("MainWindow", "2-Split"))
+            action_split_4 = split_menu.addAction(app_tr("MainWindow", "4-Split"))
             action_split_single.triggered.connect(lambda: self.on_split_view_selected("single"))
             action_split_2.triggered.connect(lambda: self.on_split_view_selected("2-split"))
             action_split_4.triggered.connect(lambda: self.on_split_view_selected("4-split"))
@@ -694,7 +799,7 @@ class MainWindow(QMainWindow):
         if self.btn_nav_back:
             self.btn_nav_back.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
             self.btn_nav_back.setText("")
-            self.btn_nav_back.setToolTip("Zurück")
+            self.btn_nav_back.setToolTip(app_tr("MainWindow", "Zurück"))
             self.btn_nav_back.setAutoRaise(True)
             self.btn_nav_back.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             self.btn_nav_back.clicked.connect(self.navigate_back)
@@ -702,7 +807,7 @@ class MainWindow(QMainWindow):
         if self.btn_nav_up:
             self.btn_nav_up.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_FileDialogToParent))
             self.btn_nav_up.setText("")
-            self.btn_nav_up.setToolTip("Eine Ebene nach oben")
+            self.btn_nav_up.setToolTip(app_tr("MainWindow", "Eine Ebene nach oben"))
             self.btn_nav_up.setAutoRaise(True)
             self.btn_nav_up.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             self.btn_nav_up.clicked.connect(self.navigate_up)
@@ -717,6 +822,7 @@ class MainWindow(QMainWindow):
         self.navigator_manager = NavigatorManager(navigator_widget, self.navigator_data_path)
         self.navigator_manager.setup()
         navigator_widget.itemClicked.connect(self.on_nav_click)
+        self.navigator_manager.entryMiddleClicked.connect(self.on_nav_middle_click)
 
     def setup_shortcuts(self):
         self.action_refresh_tree = QAction(self.ui)
@@ -736,6 +842,14 @@ class MainWindow(QMainWindow):
         active_pane = self.get_active_pane()
         if active_pane:
             active_pane.navigate_to(path)
+
+    def on_nav_middle_click(self, path):
+        if not path:
+            return
+
+        active_pane = self.get_active_pane()
+        if active_pane and hasattr(active_pane, "open_path_in_new_tab"):
+            active_pane.open_path_in_new_tab(path)
 
     def navigate_back(self):
         active_pane = self.get_active_pane()
@@ -802,11 +916,11 @@ class MainWindow(QMainWindow):
             try:
                 info_text = (
                     f"{APP_NAME}\n\n"
-                    "Ein einfacher Dateimanager auf Basis von PySide6.\n\n"
-                    f"Navigator-Daten:\n{self.navigator_data_path}\n\n"
-                    f"Sitzungsdaten:\n{self.session_data_path}"
+                    f"{app_tr('MainWindow', 'Ein einfacher Dateimanager auf Basis von PySide6.')}\n\n"
+                    f"{app_tr('MainWindow', 'Navigator-Daten:')}\n{self.navigator_data_path}\n\n"
+                    f"{app_tr('MainWindow', 'Sitzungsdaten:')}\n{self.session_data_path}"
                 )
-                QMessageBox.information(self.ui, "Über / Info", info_text)
+                QMessageBox.information(self.ui, app_tr("MainWindow", "Über / Info"), info_text)
             except Exception:
                 pass
 
@@ -821,6 +935,11 @@ class MainWindow(QMainWindow):
 
             parent_widget = self.ui if isinstance(self.ui, QWidget) else self
             self._settings_dialog = SettingsDialog(parent_widget, self.editor_settings)
+            self._settings_dialog.settingsChanged.connect(self.apply_tab_close_icon_settings)
+            self._settings_dialog.languagePreferenceChanged.connect(self.on_language_preference_changed)
+            self._settings_dialog.sessionExportRequested.connect(self.on_session_export_requested)
+            self._settings_dialog.sessionImportRequested.connect(self.on_session_import_requested)
+            self._settings_dialog.factoryResetRequested.connect(self.on_factory_reset_requested)
             self._settings_dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             self._settings_dialog.destroyed.connect(lambda _=None: setattr(self, "_settings_dialog", None))
 
@@ -831,7 +950,110 @@ class MainWindow(QMainWindow):
             self._settings_dialog.activateWindow()
         except Exception as error:
             debug_exception("MainWindow.show_settings_dialog failed", error)
-            QMessageBox.warning(self.ui, "Einstellungen", "Einstellungsfenster konnte nicht geöffnet werden.")
+            QMessageBox.warning(
+                self.ui,
+                app_tr("MainWindow", "Einstellungen"),
+                app_tr("MainWindow", "Einstellungsfenster konnte nicht geöffnet werden."),
+            )
+
+    def on_session_export_requested(self):
+        suggested_name = f"tablion-session-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        selected_path, _ = QFileDialog.getSaveFileName(
+            self.ui,
+            app_tr("MainWindow", "Session exportieren"),
+            str(Path.home() / suggested_name),
+            app_tr("MainWindow", "JSON-Dateien (*.json)"),
+        )
+        if not selected_path:
+            return
+
+        target = Path(selected_path).expanduser()
+        if target.suffix.lower() != ".json":
+            target = target.with_suffix(".json")
+
+        try:
+            self.export_session_bundle(target)
+            QMessageBox.information(
+                self.ui,
+                app_tr("MainWindow", "Session exportiert"),
+                app_tr("MainWindow", "Session wurde erfolgreich exportiert."),
+            )
+        except Exception as error:
+            debug_exception("MainWindow.on_session_export_requested failed", error)
+            QMessageBox.warning(
+                self.ui,
+                app_tr("MainWindow", "Session exportieren"),
+                app_tr("MainWindow", "Session konnte nicht exportiert werden."),
+            )
+
+    def on_session_import_requested(self):
+        selected_path, _ = QFileDialog.getOpenFileName(
+            self.ui,
+            app_tr("MainWindow", "Session importieren"),
+            str(Path.home()),
+            app_tr("MainWindow", "JSON-Dateien (*.json)"),
+        )
+        if not selected_path:
+            return
+
+        source = Path(selected_path).expanduser()
+        try:
+            self.import_session_bundle(source)
+            self.save_session_state()
+            if self.navigator_manager:
+                self.navigator_manager.save_current_state()
+            QMessageBox.information(
+                self.ui,
+                app_tr("MainWindow", "Session importiert"),
+                app_tr("MainWindow", "Session wurde erfolgreich importiert."),
+            )
+        except Exception as error:
+            debug_exception("MainWindow.on_session_import_requested failed", error)
+            QMessageBox.warning(
+                self.ui,
+                app_tr("MainWindow", "Session importieren"),
+                app_tr("MainWindow", "Session konnte nicht importiert werden."),
+            )
+
+    def on_factory_reset_requested(self):
+        confirmed = ask_yes_no(
+            self.ui,
+            app_tr("MainWindow", "Werkseinstellung"),
+            app_tr(
+                "MainWindow",
+                "Alle Tabgruppen und Navigator-Einträge werden auf Werkseinstellung zurückgesetzt. Fortfahren?",
+            ),
+            default_no=True,
+        )
+        if not confirmed:
+            return
+
+        try:
+            self.reset_to_factory_defaults()
+            QMessageBox.information(
+                self.ui,
+                app_tr("MainWindow", "Werkseinstellung"),
+                app_tr("MainWindow", "Tablion wurde auf Werkseinstellung zurückgesetzt."),
+            )
+        except Exception as error:
+            debug_exception("MainWindow.on_factory_reset_requested failed", error)
+            QMessageBox.warning(
+                self.ui,
+                app_tr("MainWindow", "Werkseinstellung"),
+                app_tr("MainWindow", "Zurücksetzen auf Werkseinstellung ist fehlgeschlagen."),
+            )
+
+    def on_language_preference_changed(self, language_preference):
+        app = QApplication.instance()
+        if app is None:
+            return
+        apply_localization(app, language_preference)
+        if self.group_controller is not None:
+            self.group_controller.retranslate_panes()
+        if self._settings_dialog is not None and self._settings_dialog.isVisible():
+            self._settings_dialog.close()
+            self._settings_dialog = None
+            QTimer.singleShot(0, self.show_settings_dialog)
 
 def main(argv=None):
     # Application entry point used by packaging entry-points
@@ -853,7 +1075,13 @@ def main(argv=None):
         return 0
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_NAME)
-    setup_localization(app)
+
+    config_root = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation)
+    if not config_root:
+        config_root = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.ConfigLocation)
+    config_dir = Path(config_root) if config_root else (Path.home() / ".config" / APP_NAME.lower())
+    language_pref = EditorSettings(config_dir / "editor_settings.json").language_preference
+    setup_localization(app, language_pref)
     icon = QIcon.fromTheme("system-file-manager")
     if icon.isNull():
         project_root = Path(__file__).resolve().parent.parent

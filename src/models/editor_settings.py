@@ -9,6 +9,9 @@ class EditorSettings:
         self.storage_path = storage_path
         self._tablion_editor: Optional[str] = None
         self._application_double_click_behavior = "start"
+        self._show_group_tab_close_icons = False
+        self._show_file_tab_close_icons = False
+        self._language_preference = "system"
         self.load()
 
     @property
@@ -25,6 +28,18 @@ class EditorSettings:
     def application_double_click_behavior(self) -> str:
         return self._application_double_click_behavior
 
+    @property
+    def show_group_tab_close_icons(self) -> bool:
+        return self._show_group_tab_close_icons
+
+    @property
+    def show_file_tab_close_icons(self) -> bool:
+        return self._show_file_tab_close_icons
+
+    @property
+    def language_preference(self) -> str:
+        return self._language_preference
+
     def load(self) -> None:
         if not self.storage_path.exists():
             return
@@ -39,12 +54,20 @@ class EditorSettings:
         behavior = payload.get("application_double_click_behavior")
         if behavior in {"start", "edit"}:
             self._application_double_click_behavior = behavior
+        self._show_group_tab_close_icons = bool(payload.get("show_group_tab_close_icons", False))
+        self._show_file_tab_close_icons = bool(payload.get("show_file_tab_close_icons", False))
+        language_pref = str(payload.get("language_preference") or "system").strip().lower()
+        if language_pref in {"system", "de", "en"}:
+            self._language_preference = language_pref
 
     def save(self) -> None:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "tablion_editor": self._tablion_editor,
             "application_double_click_behavior": self._application_double_click_behavior,
+            "show_group_tab_close_icons": self._show_group_tab_close_icons,
+            "show_file_tab_close_icons": self._show_file_tab_close_icons,
+            "language_preference": self._language_preference,
         }
         self.storage_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -60,4 +83,27 @@ class EditorSettings:
         if normalized == self._application_double_click_behavior:
             return
         self._application_double_click_behavior = normalized
+        self.save()
+
+    def update_show_group_tab_close_icons(self, value: bool) -> None:
+        normalized = bool(value)
+        if normalized == self._show_group_tab_close_icons:
+            return
+        self._show_group_tab_close_icons = normalized
+        self.save()
+
+    def update_show_file_tab_close_icons(self, value: bool) -> None:
+        normalized = bool(value)
+        if normalized == self._show_file_tab_close_icons:
+            return
+        self._show_file_tab_close_icons = normalized
+        self.save()
+
+    def update_language_preference(self, value: str) -> None:
+        normalized = str(value or "system").strip().lower()
+        if normalized not in {"system", "de", "en"}:
+            normalized = "system"
+        if normalized == self._language_preference:
+            return
+        self._language_preference = normalized
         self.save()

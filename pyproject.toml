@@ -3,7 +3,7 @@
 name = "tablion-file-manager"
 
 # RPM-Version (Versionsnummer der Anwendung)
-version = "0.1.0"
+version = "0.3.0"
 
 # RPM-Description (Beschreibung)
 description = " Dateimanager mit Tabgruppen, Multi-View und smarter Dateiorganisation"
@@ -14,9 +14,15 @@ authors = [{name = "Antonio Cambule"}]
 [project.scripts]
 tablion-file-manager = "main:main"
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.package-data]
 "ui" = ["*.ui"]
 
+[tool.setuptools.data-files]
+"resources/translations" = ["resources/translations/*.qm"]
+
 [tool.rpm]
 # RPM-Release-Nummer (Buildnummer)
-release = "19"
+release = "1"

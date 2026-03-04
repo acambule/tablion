@@ -8,6 +8,7 @@ from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout, QApplication, QWidget
 from PySide6.QtCore import Qt
 
+from localization import app_tr
 from utils.xdg_defaults import get_default_file_manager, get_desktop_display_name, ensure_user_desktop_file, set_default_file_manager
 from version_info import formatted_version
 
@@ -24,7 +25,7 @@ class AboutDialog(QDialog):
             raise RuntimeError(f"Konnte UI nicht laden: {ui_path}")
 
         # embed loaded UI into this dialog
-        self.setWindowTitle(self.ui.windowTitle())
+        self.setWindowTitle(app_tr("AboutDialog", "Über / Info"))
         # Try stricter customization: use CustomizeWindowHint and explicitly
         # disable minimize/maximize. This tends to be honored on X11/KDE.
         try:
@@ -54,11 +55,19 @@ class AboutDialog(QDialog):
         self.setDefaultButton = self.ui.findChild(QPushButton, 'setDefaultButton')
         self.closeButton = self.ui.findChild(QPushButton, 'closeButton')
 
+        try:
+            if self.setDefaultButton:
+                self.setDefaultButton.setText(app_tr("AboutDialog", "Tablion als Standard"))
+            if self.closeButton:
+                self.closeButton.setText(app_tr("AboutDialog", "Schließen"))
+        except Exception:
+            pass
+
         # update intro text with version
         try:
             intro_html = (
                 f"<b>Tablion {formatted_version()}</b><br/><br/>"
-                "Dateimanager mit Tabgruppen, Multi-View und smarter Dateiorganisation."
+                f"{app_tr('AboutDialog', 'Dateimanager mit Tabgruppen, Multi-View und smarter Dateiorganisation.')}"
             )
             if self.introLabel:
                 self.introLabel.setText(intro_html)
@@ -67,7 +76,10 @@ class AboutDialog(QDialog):
 
         # populate paths
         try:
-            self.pathsLabel.setText(f"Navigator-Daten:<br>{navigator_data_path}<br><br>Sitzungsdaten:<br>{session_data_path}")
+            self.pathsLabel.setText(
+                f"{app_tr('AboutDialog', 'Navigator-Daten:')}<br>{navigator_data_path}<br><br>"
+                f"{app_tr('AboutDialog', 'Sitzungsdaten:')}<br>{session_data_path}"
+            )
         except Exception:
             pass
 
@@ -75,10 +87,17 @@ class AboutDialog(QDialog):
         try:
             current = get_default_file_manager()
             disp = get_desktop_display_name(current) if current else None
-            self.defaultLabel.setText(f"Standard-Dateimanager: {disp or (current or 'unbekannt')}")
+            fallback_name = disp or (current or app_tr("AboutDialog", "unbekannt"))
+            self.defaultLabel.setText(
+                app_tr("AboutDialog", "Standard-Dateimanager: {name}").format(name=fallback_name)
+            )
         except Exception:
             try:
-                self.defaultLabel.setText("Standard-Dateimanager: unbekannt")
+                self.defaultLabel.setText(
+                    app_tr("AboutDialog", "Standard-Dateimanager: {name}").format(
+                        name=app_tr("AboutDialog", "unbekannt")
+                    )
+                )
             except Exception:
                 pass
 
@@ -104,10 +123,14 @@ class AboutDialog(QDialog):
             if ok:
                 try:
                     dn = get_desktop_display_name(desired_desktop) or desired_desktop
-                    self.defaultLabel.setText(f"Standard-Dateimanager: {dn}")
+                    self.defaultLabel.setText(
+                        app_tr("AboutDialog", "Standard-Dateimanager: {name}").format(name=dn)
+                    )
                 except Exception:
                     try:
-                        self.defaultLabel.setText(f"Standard-Dateimanager: {desired_desktop}")
+                        self.defaultLabel.setText(
+                            app_tr("AboutDialog", "Standard-Dateimanager: {name}").format(name=desired_desktop)
+                        )
                     except Exception:
                         pass
                 try:

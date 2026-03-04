@@ -3,9 +3,11 @@ import json
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QModelIndex, QStandardPaths, QEvent, QObject, QSize
+from PySide6.QtCore import Qt, QModelIndex, QStandardPaths, QEvent, QObject, QSize, Signal
 from PySide6.QtGui import QColor, QIcon, QPen
 from PySide6.QtWidgets import QApplication, QAbstractItemView, QHeaderView, QStyle, QStyledItemDelegate, QTreeWidget, QTreeWidgetItem, QMenu, QInputDialog, QLineEdit
+
+from localization import app_tr
 
 
 ROLE_PATH = Qt.ItemDataRole.UserRole
@@ -30,7 +32,6 @@ DEFAULT_NAVIGATOR_DATA = {
             "icon": "folder-favorites",
             "entries": [
                 {"label": "Persönlicher Ordner", "dynamic": "home", "icon": "user-home", "active": True},
-                {"type": "separator", "label": "────────────"},
                 {"label": "Papierkorb", "dynamic": "trash", "icon": "user-trash", "active": True},
                 {"label": "Arbeitsfläche", "dynamic": "desktop", "icon": "user-desktop", "active": True},
                 {"label": "Dokumente", "dynamic": "documents", "icon": "folder-documents", "active": True},
@@ -43,10 +44,7 @@ DEFAULT_NAVIGATOR_DATA = {
             "collapsible": True,
             "expanded": True,
             "icon": "folder-cloud",
-            "entries": [
-                {"label": "OneDrive", "path": "~/OneDrive", "icon": "folder-cloud"},
-                {"label": "Dropbox", "path": "~/Dropbox", "icon": "folder-cloud"},
-            ],
+            "entries": [],
         },
         {
             "name": "Laufwerke",
@@ -86,6 +84,8 @@ class NavigatorDropIndicatorDelegate(QStyledItemDelegate):
 
 
 class NavigatorManager(QObject):
+    entryMiddleClicked = Signal(str)
+
     def __init__(self, widget: QTreeWidget, data_path: Path):
         super().__init__(widget)
         self.widget = widget
@@ -116,6 +116,13 @@ class NavigatorManager(QObject):
     def eventFilter(self, watched, event):
         try:
             if watched == self.widget.viewport():
+                if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.MiddleButton:
+                    item = self.widget.itemAt(event.position().toPoint())
+                    path = self.get_entry_path(item) if item is not None else None
+                    if path:
+                        self.entryMiddleClicked.emit(path)
+                        return True
+
                 if event.type() == QEvent.Type.DragEnter:
                     if self.can_handle_external_folder_drop(event):
                         self.update_drop_indicator(event.position().toPoint())
@@ -387,9 +394,24 @@ class NavigatorManager(QObject):
             else:
                 entries = group.get('entries', [])
 
-            show_orte_separator = True
-            if str(group_name).strip() == 'Orte':
-                show_orte_separator = self.has_active_system_entries(entries)
+            if str(group_name).strip() == 'Orte' and isinstance(entries, list):
+                system_entries = []
+                custom_entries = []
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    if entry.get('type') == 'separator':
+                        continue
+                    source = str(entry.get('source', 'system')).strip()
+                    if source == 'custom':
+                        custom_entries.append(entry)
+                    else:
+                        system_entries.append(entry)
+
+                entries = list(system_entries)
+                if custom_entries:
+                    entries.append({'type': 'separator', 'label': '────────────', 'id': 'separator:orte-custom'})
+                    entries.extend(custom_entries)
 
             for entry_index, entry in enumerate(entries):
                 entry_type = entry.get('type', 'entry')
@@ -406,8 +428,6 @@ class NavigatorManager(QObject):
                     separator_flags |= Qt.ItemFlag.ItemIsDragEnabled
                     separator_flags &= ~Qt.ItemFlag.ItemIsDropEnabled
                     separator_item.setFlags(separator_flags)
-                    if str(group_name).strip() == 'Orte':
-                        separator_item.setHidden(not show_orte_separator)
                     group_item.addChild(separator_item)
                     continue
 
@@ -445,24 +465,6 @@ class NavigatorManager(QObject):
             self.widget.setFirstColumnSpanned(group_row, QModelIndex(), True)
             group_item.setExpanded(group.get('expanded', True) if collapsible else True)
             rendered_groups += 1
-
-    def has_active_system_entries(self, entries):
-        if not isinstance(entries, list):
-            return False
-
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            if entry.get('type') == 'separator':
-                continue
-
-            source = str(entry.get('source', 'system')).strip()
-            if source != 'system':
-                continue
-            if entry.get('active', True):
-                return True
-
-        return False
 
     def resolve_icon(self, icon_name, fallback_standard_icon):
         if icon_name:
@@ -563,11 +565,11 @@ class NavigatorManager(QObject):
             if source == 'custom':
                 rename_action = menu.addAction(
                     self.resolve_icon('edit-rename', QStyle.StandardPixmap.SP_FileDialogDetailedView),
-                    'Umbenennen',
+                    app_tr('NavigatorManager', 'Umbenennen'),
                 )
                 delete_action = menu.addAction(
                     self.resolve_icon('edit-delete', QStyle.StandardPixmap.SP_TrashIcon),
-                    'Löschen',
+                    app_tr('NavigatorManager', 'Löschen'),
                 )
                 chosen = menu.exec(self.widget.viewport().mapToGlobal(pos))
                 if chosen == rename_action:
@@ -578,7 +580,7 @@ class NavigatorManager(QObject):
 
             hide_action = menu.addAction(
                 self.resolve_icon('list-remove', QStyle.StandardPixmap.SP_DialogCancelButton),
-                'Ausblenden',
+                app_tr('NavigatorManager', 'Ausblenden'),
             )
             chosen = menu.exec(self.widget.viewport().mapToGlobal(pos))
             if chosen == hide_action:
@@ -591,7 +593,7 @@ class NavigatorManager(QObject):
             if not inactive_entries:
                 return
 
-            activate_submenu = menu.addMenu('Einblenden')
+            activate_submenu = menu.addMenu(app_tr('NavigatorManager', 'Einblenden'))
             activate_submenu.setStyleSheet(
                 "QMenu::separator {"
                 "height: 1px;"
@@ -604,7 +606,7 @@ class NavigatorManager(QObject):
             if group_name == 'Orte':
                 show_all_action = activate_submenu.addAction(
                     self.resolve_icon('view-visible', QStyle.StandardPixmap.SP_DialogApplyButton),
-                    'Alle einblenden',
+                    app_tr('NavigatorManager', 'Alle einblenden'),
                 )
                 activate_submenu.addSeparator()
             for entry in inactive_entries:
@@ -656,8 +658,8 @@ class NavigatorManager(QObject):
         current_name = (item.text(0) or '').strip() or 'Favorit'
 
         dialog = QInputDialog(self.widget)
-        dialog.setWindowTitle('Favorit umbenennen')
-        dialog.setLabelText('Name:')
+        dialog.setWindowTitle(app_tr('NavigatorManager', 'Favorit umbenennen'))
+        dialog.setLabelText(app_tr('NavigatorManager', 'Name:'))
         dialog.setTextValue(current_name)
         dialog.setTextEchoMode(QLineEdit.EchoMode.Normal)
         dialog.setMinimumWidth(520)
@@ -874,7 +876,7 @@ class NavigatorManager(QObject):
             entry_key = normalized_visible.pop('_entry_key', None)
 
             if normalized_visible.get('type') == 'separator':
-                normalized_visible.pop('active', None)
+                continue
 
             if entry_key and entry_key in source_map:
                 source_entry = source_map[entry_key]

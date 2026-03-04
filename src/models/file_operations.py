@@ -4,6 +4,8 @@ import importlib
 import shutil
 from pathlib import Path
 
+from localization import app_tr
+
 
 class FileOperations:
     def _to_path(self, value: str | Path) -> Path:
@@ -19,13 +21,17 @@ class FileOperations:
         destination_path = self._to_path(destination)
 
         if not source_path.exists():
-            raise FileNotFoundError(f"Quelle nicht gefunden: {source_path}")
+            raise FileNotFoundError(
+                app_tr("FileOperations", "Quelle nicht gefunden: {path}").format(path=source_path)
+            )
 
         target_path = self._resolve_destination(source_path, destination_path)
 
         if target_path.exists():
             if not overwrite:
-                raise FileExistsError(f"Ziel existiert bereits: {target_path}")
+                raise FileExistsError(
+                    app_tr("FileOperations", "Ziel existiert bereits: {path}").format(path=target_path)
+                )
             self.delete(target_path, permanent=True)
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -42,13 +48,17 @@ class FileOperations:
         destination_path = self._to_path(destination)
 
         if not source_path.exists():
-            raise FileNotFoundError(f"Quelle nicht gefunden: {source_path}")
+            raise FileNotFoundError(
+                app_tr("FileOperations", "Quelle nicht gefunden: {path}").format(path=source_path)
+            )
 
         target_path = self._resolve_destination(source_path, destination_path)
 
         if target_path.exists():
             if not overwrite:
-                raise FileExistsError(f"Ziel existiert bereits: {target_path}")
+                raise FileExistsError(
+                    app_tr("FileOperations", "Ziel existiert bereits: {path}").format(path=target_path)
+                )
             self.delete(target_path, permanent=True)
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,13 +69,17 @@ class FileOperations:
         target_path = self._to_path(target)
 
         if not target_path.exists():
-            raise FileNotFoundError(f"Pfad nicht gefunden: {target_path}")
+            raise FileNotFoundError(
+                app_tr("FileOperations", "Pfad nicht gefunden: {path}").format(path=target_path)
+            )
 
         if not permanent:
             try:
                 send2trash_module = importlib.import_module("send2trash")
             except ModuleNotFoundError as error:
-                raise RuntimeError("Papierkorb-Funktion ist nicht verfügbar (send2trash fehlt).") from error
+                raise RuntimeError(
+                    app_tr("FileOperations", "Papierkorb-Funktion ist nicht verfügbar (send2trash fehlt).")
+                ) from error
 
             send2trash_module.send2trash(str(target_path))
             return
@@ -79,19 +93,23 @@ class FileOperations:
         target_path = self._to_path(target)
 
         if not target_path.exists():
-            raise FileNotFoundError(f"Pfad nicht gefunden: {target_path}")
+            raise FileNotFoundError(
+                app_tr("FileOperations", "Pfad nicht gefunden: {path}").format(path=target_path)
+            )
 
         if not new_name or new_name.strip() == "":
-            raise ValueError("Neuer Name darf nicht leer sein")
+            raise ValueError(app_tr("FileOperations", "Neuer Name darf nicht leer sein"))
 
         if "/" in new_name or "\\" in new_name:
-            raise ValueError("new_name darf keinen Pfad enthalten")
+            raise ValueError(app_tr("FileOperations", "new_name darf keinen Pfad enthalten"))
 
         destination_path = target_path.with_name(new_name)
 
         if destination_path.exists():
             if not overwrite:
-                raise FileExistsError(f"Ziel existiert bereits: {destination_path}")
+                raise FileExistsError(
+                    app_tr("FileOperations", "Ziel existiert bereits: {path}").format(path=destination_path)
+                )
             self.delete(destination_path, permanent=True)
 
         target_path.rename(destination_path)

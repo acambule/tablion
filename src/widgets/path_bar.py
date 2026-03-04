@@ -260,7 +260,10 @@ class PathBar(QWidget):
 
     def _start_path_drag(self, source_widget, path):
         mime_data = QMimeData()
-        mime_data.setUrls([QUrl.fromLocalFile(path)])
+        url = QUrl.fromLocalFile(path)
+        encoded_uri = bytes(url.toEncoded()).decode("utf-8")
+
+        mime_data.setData("text/uri-list", (encoded_uri + "\r\n").encode("utf-8"))
 
         drag = QDrag(source_widget)
         drag.setMimeData(mime_data)
