@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtUiTools import QUiLoader
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout, QApplication, QWidget
 from PySide6.QtCore import Qt
 
@@ -49,8 +50,11 @@ class AboutDialog(QDialog):
         layout.addWidget(self.ui)
 
         # find widgets inside the loaded UI
-        self.introLabel = self.ui.findChild(QLabel, 'introLabel')
-        self.pathsLabel = self.ui.findChild(QLabel, 'pathsLabel')
+        self.appNameLabel = self.ui.findChild(QLabel, 'appNameLabel')
+        self.versionLabel = self.ui.findChild(QLabel, 'versionLabel')
+        self.logoLabel = self.ui.findChild(QLabel, 'logoLabel')
+        self.linksLabel = self.ui.findChild(QLabel, 'linksLabel')
+        self.infoLabel = self.ui.findChild(QLabel, 'infoLabel')
         self.defaultLabel = self.ui.findChild(QLabel, 'defaultLabel')
         self.setDefaultButton = self.ui.findChild(QPushButton, 'setDefaultButton')
         self.closeButton = self.ui.findChild(QPushButton, 'closeButton')
@@ -63,20 +67,47 @@ class AboutDialog(QDialog):
         except Exception:
             pass
 
-        # update intro text with version
+        # update header texts and link panel
         try:
-            intro_html = (
-                f"<b>Tablion {formatted_version()}</b><br/><br/>"
-                f"{app_tr('AboutDialog', 'Dateimanager mit Tabgruppen, Multi-View und smarter Dateiorganisation.')}"
-            )
-            if self.introLabel:
-                self.introLabel.setText(intro_html)
+            if self.appNameLabel:
+                self.appNameLabel.setText("Tablion")
+            if self.versionLabel:
+                self.versionLabel.setText(f"Version {formatted_version()}")
+            if self.linksLabel:
+                self.linksLabel.setText(
+                    "<b>Links</b><br/>"
+                    "<a href=\"https://github.com/acambule/tablion\">"
+                    "https://github.com/acambule/tablion"
+                    "</a>"
+                )
+        except Exception:
+            pass
+
+        # placeholder icon area (do not use bundled app artwork here)
+        try:
+            if self.logoLabel:
+                self.logoLabel.setText("")
+                icon = QIcon.fromTheme("system-file-manager")
+                pixmap = icon.pixmap(256, 256)
+
+                if not pixmap.isNull():
+                    self.logoLabel.setPixmap(
+                        pixmap.scaled(256, 256, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    )
+                else:
+                    self.logoLabel.setText("Logo\n256 x 256")
+                    self.logoLabel.setStyleSheet(
+                        "QLabel {"
+                        " border: 1px dashed rgba(120, 120, 120, 180);"
+                        " color: rgba(150, 150, 150, 220);"
+                        "}"
+                    )
         except Exception:
             pass
 
         # populate paths
         try:
-            self.pathsLabel.setText(
+            self.infoLabel.setText(
                 f"{app_tr('AboutDialog', 'Navigator-Daten:')}<br>{navigator_data_path}<br><br>"
                 f"{app_tr('AboutDialog', 'Sitzungsdaten:')}<br>{session_data_path}"
             )
@@ -161,12 +192,6 @@ class AboutDialog(QDialog):
             w = sh.width() or 400
             h = sh.height() or 200
             self.resize(w, h)
-            # enforce fixed size to prevent window managers offering a maximize
-            # action (many WMs disable maximize when the window has a fixed size)
-            try:
-                self.setFixedSize(w, h)
-            except Exception:
-                pass
             # determine the visible widget to center over
             ref = None
             parent = self.parent()

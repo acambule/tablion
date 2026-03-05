@@ -790,7 +790,10 @@ class PaneController(QObject):
                 index = watched_view.indexAt(event.position().toPoint())
                 selection_model = watched_view.selectionModel()
                 is_selected_index = bool(selection_model is not None and index.isValid() and selection_model.isSelected(index))
-                if not index.isValid() or not is_selected_index:
+                has_multi_select_modifier = bool(
+                    event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+                )
+                if (not index.isValid() or not is_selected_index) and not has_multi_select_modifier:
                     watched_view.clearSelection()
                     watched_view.setCurrentIndex(QModelIndex())
                     self._selection_rubber_origin = event.position().toPoint()

@@ -2,55 +2,247 @@
 <ui version="4.0">
  <class>AboutDialogUI</class>
  <widget class="QWidget" name="AboutDialogUI">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>760</width>
+    <height>560</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>760</width>
+    <height>560</height>
+   </size>
+  </property>
   <property name="windowTitle">
    <string>Über / Info</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="spacing">
+    <number>12</number>
+   </property>
    <item>
-    <widget class="QLabel" name="introLabel">
-     <property name="text">
-      <string>&lt;b&gt;Tablion&lt;/b&gt;&lt;br/&gt;&lt;br/&gt;Ein einfacher Dateimanager auf Basis von PySide6.</string>
+    <layout class="QHBoxLayout" name="topLayout">
+     <property name="spacing">
+      <number>12</number>
      </property>
-     <property name="textFormat">
-      <enum>Qt::RichText</enum>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="QLabel" name="pathsLabel">
-     <property name="text">
-      <string>Navigator-Daten:\n/some/path\n\nSitzungsdaten:\n/some/path</string>
-     </property>
-     <property name="textFormat">
-      <enum>Qt::RichText</enum>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="defaultLayout">
      <item>
-      <widget class="QLabel" name="defaultLabel">
-       <property name="text">
-        <string>Standard-Dateimanager: unbekannt</string>
+      <widget class="QFrame" name="leftPanel">
+       <property name="frameShape">
+        <enum>QFrame::StyledPanel</enum>
        </property>
+       <layout class="QVBoxLayout" name="leftPanelLayout">
+        <property name="spacing">
+         <number>8</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="appNameLabel">
+          <property name="font">
+           <font>
+            <pointsize>18</pointsize>
+            <weight>75</weight>
+            <bold>true</bold>
+           </font>
+          </property>
+          <property name="text">
+           <string>Tablion</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="versionLabel">
+          <property name="font">
+           <font>
+            <pointsize>11</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Version</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="logoLabel">
+          <property name="minimumSize">
+           <size>
+            <width>256</width>
+            <height>256</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>256</width>
+            <height>256</height>
+           </size>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignCenter</set>
+          </property>
+          <property name="frameShape">
+           <enum>QFrame::Box</enum>
+          </property>
+          <property name="text">
+           <string>Logo</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </widget>
      </item>
      <item>
-      <widget class="QPushButton" name="setDefaultButton">
-       <property name="text">
-        <string>Tablion als Standard</string>
+      <widget class="QFrame" name="rightPanel">
+       <property name="frameShape">
+        <enum>QFrame::StyledPanel</enum>
        </property>
+       <layout class="QVBoxLayout" name="rightPanelLayout">
+        <property name="spacing">
+         <number>10</number>
+        </property>
+        <item>
+         <spacer name="rightTopOffsetSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint">
+           <size>
+            <width>20</width>
+            <height>74</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QLabel" name="copyrightLabel">
+          <property name="textFormat">
+           <enum>Qt::RichText</enum>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+          <property name="text">
+           <string>&lt;b&gt;Copyright&lt;/b&gt;&lt;br/&gt;2026 Antonio Cambule</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="linksLabel">
+          <property name="textFormat">
+           <enum>Qt::RichText</enum>
+          </property>
+          <property name="openExternalLinks">
+           <bool>true</bool>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+          <property name="text">
+           <string>&lt;b&gt;Links&lt;/b&gt;&lt;br/&gt;&lt;a href=&quot;https://github.com/acambule/tablion&quot;&gt;GitHub Repository&lt;/a&gt;</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="rightPanelSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
       </widget>
      </item>
     </layout>
    </item>
    <item>
-    <spacer name="spacer"/>
+    <widget class="QFrame" name="bottomPanel">
+     <property name="frameShape">
+      <enum>QFrame::StyledPanel</enum>
+     </property>
+     <layout class="QVBoxLayout" name="bottomPanelLayout">
+      <property name="spacing">
+       <number>10</number>
+      </property>
+      <item>
+       <widget class="QLabel" name="infoLabel">
+        <property name="textFormat">
+         <enum>Qt::RichText</enum>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="text">
+         <string>Navigator-Daten:\n/some/path\n\nSitzungsdaten:\n/some/path</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="defaultLayout">
+        <item>
+         <widget class="QLabel" name="defaultLabel">
+          <property name="text">
+           <string>Standard-Dateimanager: unbekannt</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="defaultSpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QPushButton" name="setDefaultButton">
+          <property name="text">
+           <string>Tablion als Standard</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <spacer name="spacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
    </item>
    <item>
     <layout class="QHBoxLayout" name="closeLayout">
      <item>
-      <spacer name="closeSpacer"/>
+      <spacer name="closeSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
      </item>
      <item>
       <widget class="QPushButton" name="closeButton">
