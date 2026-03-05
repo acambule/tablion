@@ -47,6 +47,18 @@
       <translation>Englisch</translation>
     </message>
     <message>
+      <source>Neue Gruppe erstellen</source>
+      <translation>Neue Gruppe erstellen</translation>
+    </message>
+    <message>
+      <source>Mit Standard-Tab</source>
+      <translation>Mit Standard-Tab</translation>
+    </message>
+    <message>
+      <source>Aktuelle Tabs übernehmen</source>
+      <translation>Aktuelle Tabs übernehmen</translation>
+    </message>
+    <message>
       <source>Legt fest, welcher Editor bei der Aktion "Bearbeiten" verwendet wird.</source>
       <translation>Legt fest, welcher Editor bei der Aktion "Bearbeiten" verwendet wird.</translation>
     </message>

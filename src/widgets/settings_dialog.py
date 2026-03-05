@@ -51,6 +51,7 @@ class SettingsDialog(QDialog):
 
         self._default_editor_line_edit = self.ui.findChild(QLineEdit, "defaultEditorLineEdit")
         self._language_preference_combo = self.ui.findChild(QComboBox, "languagePreferenceCombo")
+        self._group_creation_behavior_combo = self.ui.findChild(QComboBox, "groupCreationBehaviorCombo")
         self._app_double_click_behavior_combo = self.ui.findChild(QComboBox, "appDoubleClickBehaviorCombo")
         self._show_group_tab_close_icons_checkbox = self.ui.findChild(QCheckBox, "showGroupTabCloseIconsCheckBox")
         self._show_file_tab_close_icons_checkbox = self.ui.findChild(QCheckBox, "showFileTabCloseIconsCheckBox")
@@ -77,6 +78,12 @@ class SettingsDialog(QDialog):
         if self._language_preference_combo:
             language_map = {"system": 0, "de": 1, "en": 2}
             self._language_preference_combo.setCurrentIndex(language_map.get(self._editor_settings.language_preference, 0))
+
+        if self._group_creation_behavior_combo:
+            behavior_map = {"default_tab": 0, "copy_tabs": 1}
+            self._group_creation_behavior_combo.setCurrentIndex(
+                behavior_map.get(self._editor_settings.group_creation_behavior, 0)
+            )
 
         if self._show_group_tab_close_icons_checkbox:
             self._show_group_tab_close_icons_checkbox.setChecked(self._editor_settings.show_group_tab_close_icons)
@@ -133,6 +140,9 @@ class SettingsDialog(QDialog):
             index = self._language_preference_combo.currentIndex()
             lang = "system" if index == 0 else ("de" if index == 1 else "en")
             self._editor_settings.update_language_preference(lang)
+        if self._group_creation_behavior_combo:
+            behavior = "copy_tabs" if self._group_creation_behavior_combo.currentIndex() == 1 else "default_tab"
+            self._editor_settings.update_group_creation_behavior(behavior)
         if self._show_group_tab_close_icons_checkbox:
             self._editor_settings.update_show_group_tab_close_icons(self._show_group_tab_close_icons_checkbox.isChecked())
         if self._show_file_tab_close_icons_checkbox:

@@ -189,6 +189,27 @@
                           </item>
                          </widget>
                         </item>
+                        <item row="2" column="0">
+                         <widget class="QLabel" name="groupCreationBehaviorLabel">
+                          <property name="text">
+                           <string>Neue Gruppe erstellen</string>
+                          </property>
+                         </widget>
+                        </item>
+                        <item row="2" column="1">
+                         <widget class="QComboBox" name="groupCreationBehaviorCombo">
+                          <item>
+                           <property name="text">
+                            <string>Mit Standard-Tab</string>
+                           </property>
+                          </item>
+                          <item>
+                           <property name="text">
+                            <string>Aktuelle Tabs übernehmen</string>
+                           </property>
+                          </item>
+                         </widget>
+                        </item>
                       </layout>
                      </item>
                      <item>

@@ -289,10 +289,8 @@ class MainWindow(QMainWindow):
     def on_group_tab_bar_double_clicked(self, tab_index):
         debug_log(f"on_group_tab_bar_double_clicked(tab_index={tab_index})")
         if tab_index == -1:
-            active_pane = self.get_active_pane()
-            start_path = active_pane.current_path() if active_pane else QDir.homePath()
-            debug_log(f"Creating group from tab-bar double click with start_path={start_path}")
-            self.create_group(start_path=start_path)
+            debug_log("Creating group from tab-bar double click")
+            self.create_group_from_context()
             return
 
         if tab_index > 0:
@@ -313,6 +311,51 @@ class MainWindow(QMainWindow):
         except Exception as error:
             debug_exception("create_group failed", error)
             raise
+
+    def _group_creation_behavior(self) -> str:
+        if not self.editor_settings:
+            return "default_tab"
+        behavior = str(getattr(self.editor_settings, "group_creation_behavior", "default_tab") or "default_tab").strip().lower()
+        return behavior if behavior in {"default_tab", "copy_tabs"} else "default_tab"
+
+    def _compact_group_zero_when_groups_visible(self):
+        if self.group_controller and self.visible_group_indices():
+            self.group_controller.reset_group_zero_to_default(activate=False)
+
+    def create_group_from_context(self, title=None, source_pane=None, start_path=None):
+        source = source_pane or self.get_active_pane()
+        behavior = self._group_creation_behavior()
+
+        if behavior == "copy_tabs" and source and hasattr(source, "clone_tab_states"):
+            cloned = source.clone_tab_states()
+            if isinstance(cloned, tuple) and len(cloned) == 2:
+                tab_states, active_index = cloned
+            else:
+                tab_states = cloned
+                active_index = int(getattr(source, "active_tab_index", 0))
+
+            if not isinstance(tab_states, list):
+                tab_states = list(tab_states) if tab_states else []
+            if tab_states:
+                active_index = max(0, min(active_index, len(tab_states) - 1))
+                create_path = tab_states[active_index].path
+                target_pane = self.create_group(title=title, start_path=create_path)
+                if target_pane:
+                    target_pane.replace_tabs(tab_states, active_index=active_index)
+                    self._compact_group_zero_when_groups_visible()
+                    self.update_nav_buttons()
+                return target_pane
+
+        create_path = start_path
+        if not create_path and source and hasattr(source, "current_path"):
+            create_path = source.current_path()
+        if not create_path:
+            create_path = QDir.homePath()
+
+        target_pane = self.create_group(title=title, start_path=create_path)
+        self._compact_group_zero_when_groups_visible()
+        self.update_nav_buttons()
+        return target_pane
 
     def close_group(self, index, confirm=True):
         if self.group_controller:
@@ -359,9 +402,9 @@ class MainWindow(QMainWindow):
     def get_group_zero_pane(self):
         return self.group_controller.get_group_zero_pane() if self.group_controller else None
 
-    def reset_group_zero_to_default(self):
+    def reset_group_zero_to_default(self, *, activate=True):
         if self.group_controller:
-            self.group_controller.reset_group_zero_to_default()
+            self.group_controller.reset_group_zero_to_default(activate=activate)
 
     def can_offer_grouping(self, pane_controller):
         return self.group_controller.can_offer_grouping(pane_controller) if self.group_controller else False
@@ -369,8 +412,6 @@ class MainWindow(QMainWindow):
     def on_pane_group_requested(self):
         source_pane = self.sender()
         if not isinstance(source_pane, GroupWorkspaceWidget):
-            return
-        if not self.can_offer_grouping(source_pane):
             return
 
         moved_states, active_index = source_pane.move_tabs_out_and_reset(QDir.homePath())
@@ -383,6 +424,7 @@ class MainWindow(QMainWindow):
         target_pane = self.create_group(title=new_group_title, start_path=start_path)
         if target_pane:
             target_pane.replace_tabs(moved_states, active_index=active_index)
+            self._compact_group_zero_when_groups_visible()
             self.update_nav_buttons()
 
     def build_session_payload(self):
@@ -550,6 +592,7 @@ class MainWindow(QMainWindow):
 
         active_group_index = max(0, min(active_group_index, self.group_tabs.count() - 1))
         self.group_tabs.setCurrentIndex(active_group_index)
+        self._compact_group_zero_when_groups_visible()
         self.refresh_group_tabs_presentation()
         self.update_nav_buttons()
 
@@ -675,10 +718,19 @@ class MainWindow(QMainWindow):
                     tab_bar_pos = tab_bar.mapFrom(self.group_tabs, click_pos)
                     clicked_tab = tab_bar.tabAt(tab_bar_pos)
                     if self.is_group_header_area_click(click_pos) and clicked_tab == -1:
-                        active_pane = self.get_active_pane()
-                        start_path = active_pane.current_path() if active_pane else QDir.homePath()
-                        self.create_group(start_path=start_path)
+                        self.create_group_from_context()
                         return True
+
+                if event.type() == QEvent.Type.ContextMenu:
+                    click_pos = event.pos()
+                    if self.is_group_header_area_click(click_pos):
+                        tab_bar = self.group_tabs.tabBar()
+                        tab_bar_pos = tab_bar.mapFrom(self.group_tabs, click_pos)
+                        tab_index = tab_bar.tabAt(tab_bar_pos)
+                        if not tab_bar.isVisible() and tab_index < 0:
+                            tab_index = -1
+                        if self._show_group_tabs_context_menu(self.group_tabs, event.globalPos(), tab_index):
+                            return True
 
             if self.group_tabs and watched == self.group_tabs.tabBar():
                 if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.MiddleButton:
@@ -693,42 +745,44 @@ class MainWindow(QMainWindow):
                 if event.type() == QEvent.Type.ContextMenu:
                     tab_bar = self.group_tabs.tabBar()
                     tab_index = tab_bar.tabAt(event.pos())
-
-                    menu = QMenu(tab_bar)
-                    action_new_group = menu.addAction(
-                        self._group_menu_icon("folder-new", QStyle.StandardPixmap.SP_FileDialogNewFolder),
-                        app_tr("MainWindow", "Neue Gruppe"),
-                    )
-                    action_rename_group = None
-                    if tab_index > 0:
-                        action_rename_group = menu.addAction(
-                            self._group_menu_icon("edit-rename", QStyle.StandardPixmap.SP_FileDialogDetailedView),
-                            app_tr("MainWindow", "Umbenennen"),
-                        )
-                    action_close_group = None
-                    if tab_index > 0:
-                        action_close_group = menu.addAction(
-                            self._group_menu_icon("window-close", QStyle.StandardPixmap.SP_DialogCloseButton),
-                            app_tr("MainWindow", "Gruppe schließen"),
-                        )
-
-                    chosen_action = menu.exec(event.globalPos())
-                    if chosen_action == action_new_group:
-                        active_pane = self.get_active_pane()
-                        start_path = active_pane.current_path() if active_pane else QDir.homePath()
-                        self.create_group(start_path=start_path)
-                        return True
-                    if action_rename_group is not None and chosen_action == action_rename_group:
-                        self.rename_group(tab_index)
-                        return True
-                    if action_close_group is not None and chosen_action == action_close_group:
-                        self.close_group(tab_index)
+                    if self._show_group_tabs_context_menu(tab_bar, event.globalPos(), tab_index):
                         return True
                     return True
 
             return super().eventFilter(watched, event)
         except RuntimeError:
             return False
+
+    def _show_group_tabs_context_menu(self, anchor_widget, global_pos, tab_index):
+        menu = QMenu(anchor_widget)
+        action_new_group = menu.addAction(
+            self._group_menu_icon("folder-new", QStyle.StandardPixmap.SP_FileDialogNewFolder),
+            app_tr("MainWindow", "Neue Gruppe"),
+        )
+        action_rename_group = None
+        if tab_index > 0:
+            action_rename_group = menu.addAction(
+                self._group_menu_icon("edit-rename", QStyle.StandardPixmap.SP_FileDialogDetailedView),
+                app_tr("MainWindow", "Umbenennen"),
+            )
+        action_close_group = None
+        if tab_index > 0:
+            action_close_group = menu.addAction(
+                self._group_menu_icon("window-close", QStyle.StandardPixmap.SP_DialogCloseButton),
+                app_tr("MainWindow", "Gruppe schließen"),
+            )
+
+        chosen_action = menu.exec(global_pos)
+        if chosen_action == action_new_group:
+            self.create_group_from_context()
+            return True
+        if action_rename_group is not None and chosen_action == action_rename_group:
+            self.rename_group(tab_index)
+            return True
+        if action_close_group is not None and chosen_action == action_close_group:
+            self.close_group(tab_index)
+            return True
+        return bool(chosen_action)
 
     def setup_navigation_toolbar(self):
         self.btn_nav_menu = self.ui.findChild(QToolButton, "btnNavMenu")

@@ -395,6 +395,12 @@ class GroupWorkspaceWidget(QWidget):
         self._panes["primary"].replace_tabs(states, active_index=active_index)
         self._emit_active_state()
 
+    def clone_tab_states(self):
+        primary = self._panes["primary"]
+        states = primary.clone_tab_states()
+        active_index = int(getattr(primary, "active_tab_index", 0))
+        return states, active_index
+
     def move_tabs_out_and_reset(self, default_path):
         result = self._panes["primary"].move_tabs_out_and_reset(default_path)
         self._emit_active_state()

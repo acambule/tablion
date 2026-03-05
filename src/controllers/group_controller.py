@@ -131,7 +131,21 @@ class GroupController:
                 return
 
         page = self.group_tabs.widget(index)
+        transfer_states = []
+        transfer_active_index = 0
+        should_transfer_to_group_zero = len(self.visible_group_indices()) == 1
         pane_controller = self.group_panes_by_page.pop(page, None)
+        if should_transfer_to_group_zero and pane_controller and hasattr(pane_controller, "clone_tab_states"):
+            cloned = pane_controller.clone_tab_states()
+            if isinstance(cloned, tuple) and len(cloned) == 2:
+                transfer_states, transfer_active_index = cloned
+            else:
+                transfer_states = cloned
+                transfer_active_index = int(getattr(pane_controller, "active_tab_index", 0))
+
+            if not isinstance(transfer_states, list):
+                transfer_states = list(transfer_states) if transfer_states else []
+
         if pane_controller:
             if hasattr(pane_controller, "prepare_for_dispose"):
                 pane_controller.prepare_for_dispose()
@@ -143,7 +157,13 @@ class GroupController:
 
         self.refresh_group_tabs_presentation()
         if not self.visible_group_indices():
-            self.reset_group_zero_to_default()
+            group_zero_pane = self.get_group_zero_pane()
+            if group_zero_pane and transfer_states:
+                transfer_active_index = max(0, min(int(transfer_active_index), len(transfer_states) - 1))
+                group_zero_pane.replace_tabs(transfer_states, active_index=transfer_active_index)
+                self.group_tabs.setCurrentIndex(0)
+            else:
+                self.reset_group_zero_to_default()
         self.render_active_group()
         self.update_nav_buttons()
 
@@ -236,13 +256,14 @@ class GroupController:
         group_zero_page = self.group_tabs.widget(0)
         return self.group_panes_by_page.get(group_zero_page)
 
-    def reset_group_zero_to_default(self):
+    def reset_group_zero_to_default(self, *, activate=True):
         group_zero_pane = self.get_group_zero_pane()
         if not group_zero_pane:
             return
         group_zero_pane.replace_tabs([], active_index=0)
         group_zero_pane.navigate_to(QDir.homePath(), push_history=False)
-        self.group_tabs.setCurrentIndex(0)
+        if activate:
+            self.group_tabs.setCurrentIndex(0)
 
     def can_offer_grouping(self, pane_controller):
         return pane_controller is self.get_group_zero_pane() and not self.visible_group_indices()

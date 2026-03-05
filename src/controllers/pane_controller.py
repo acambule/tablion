@@ -647,13 +647,11 @@ class PaneController(QObject):
                     and not self.tab_states[tab_index].pinned
                 )
 
-                action_group = None
-                if self.can_offer_grouping():
-                    menu.addSeparator()
-                    action_group = menu.addAction(
-                        self._tab_menu_icon("view-split-left-right", QStyle.StandardPixmap.SP_ComputerIcon),
-                        app_tr("PaneController", "Gruppieren"),
-                    )
+                menu.addSeparator()
+                action_group = menu.addAction(
+                    self._tab_menu_icon("view-split-left-right", QStyle.StandardPixmap.SP_ComputerIcon),
+                    app_tr("PaneController", "Gruppieren"),
+                )
 
                 chosen_action = menu.exec(event.globalPos())
                 if chosen_action == action_new_tab:
@@ -664,7 +662,7 @@ class PaneController(QObject):
                 if chosen_action == action_close and tab_index != -1:
                     self.close_tab(tab_index)
                     return True
-                if action_group is not None and chosen_action == action_group:
+                if chosen_action == action_group:
                     self.groupRequested.emit()
                     return True
                 return True
