@@ -13,6 +13,7 @@ class EditorSettings:
         self._show_file_tab_close_icons = False
         self._language_preference = "system"
         self._group_creation_behavior = "default_tab"
+        self._middle_click_new_tab_behavior = "background"
         self.load()
 
     @property
@@ -45,6 +46,10 @@ class EditorSettings:
     def group_creation_behavior(self) -> str:
         return self._group_creation_behavior
 
+    @property
+    def middle_click_new_tab_behavior(self) -> str:
+        return self._middle_click_new_tab_behavior
+
     def load(self) -> None:
         if not self.storage_path.exists():
             return
@@ -67,6 +72,9 @@ class EditorSettings:
         group_creation_behavior = str(payload.get("group_creation_behavior") or "default_tab").strip().lower()
         if group_creation_behavior in {"default_tab", "copy_tabs"}:
             self._group_creation_behavior = group_creation_behavior
+        middle_click_behavior = str(payload.get("middle_click_new_tab_behavior") or "background").strip().lower()
+        if middle_click_behavior in {"background", "foreground"}:
+            self._middle_click_new_tab_behavior = middle_click_behavior
 
     def save(self) -> None:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,6 +85,7 @@ class EditorSettings:
             "show_file_tab_close_icons": self._show_file_tab_close_icons,
             "language_preference": self._language_preference,
             "group_creation_behavior": self._group_creation_behavior,
+            "middle_click_new_tab_behavior": self._middle_click_new_tab_behavior,
         }
         self.storage_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -124,4 +133,13 @@ class EditorSettings:
         if normalized == self._group_creation_behavior:
             return
         self._group_creation_behavior = normalized
+        self.save()
+
+    def update_middle_click_new_tab_behavior(self, value: str) -> None:
+        normalized = str(value or "background").strip().lower()
+        if normalized not in {"background", "foreground"}:
+            normalized = "background"
+        if normalized == self._middle_click_new_tab_behavior:
+            return
+        self._middle_click_new_tab_behavior = normalized
         self.save()

@@ -938,7 +938,9 @@ class MainWindow(QMainWindow):
 
         active_pane = self.get_active_pane()
         if active_pane and hasattr(active_pane, "open_path_in_new_tab"):
-            active_pane.open_path_in_new_tab(path)
+            behavior = str(getattr(self.editor_settings, "middle_click_new_tab_behavior", "background") or "background").strip().lower()
+            activate = behavior == "foreground"
+            active_pane.open_path_in_new_tab(path, activate=activate)
 
     def navigate_back(self):
         active_pane = self.get_active_pane()

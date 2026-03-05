@@ -372,10 +372,10 @@ class GroupWorkspaceWidget(QWidget):
         if pane:
             pane.navigate_to(path, push_history=push_history)
 
-    def open_path_in_new_tab(self, path):
+    def open_path_in_new_tab(self, path, activate=True):
         pane = self._active_pane()
         if pane and hasattr(pane, "open_path_in_new_tab"):
-            pane.open_path_in_new_tab(path)
+            pane.open_path_in_new_tab(path, activate=activate)
 
     def refresh_current_directory(self):
         pane = self._active_pane()

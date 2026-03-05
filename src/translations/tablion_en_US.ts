@@ -59,6 +59,18 @@
       <translation>Use current tabs</translation>
     </message>
     <message>
+      <source>Mittelklick auf Ordner</source>
+      <translation>Middle-click on folders</translation>
+    </message>
+    <message>
+      <source>Im Hintergrundtab öffnen</source>
+      <translation>Open in background tab</translation>
+    </message>
+    <message>
+      <source>Zum neuen Tab wechseln</source>
+      <translation>Switch to new tab</translation>
+    </message>
+    <message>
       <source>Legt fest, welcher Editor bei der Aktion "Bearbeiten" verwendet wird.</source>
       <translation>Defines which editor is used for the "Edit" action.</translation>
     </message>

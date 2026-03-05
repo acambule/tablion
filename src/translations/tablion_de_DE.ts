@@ -59,6 +59,18 @@
       <translation>Aktuelle Tabs übernehmen</translation>
     </message>
     <message>
+      <source>Mittelklick auf Ordner</source>
+      <translation>Mittelklick auf Ordner</translation>
+    </message>
+    <message>
+      <source>Im Hintergrundtab öffnen</source>
+      <translation>Im Hintergrundtab öffnen</translation>
+    </message>
+    <message>
+      <source>Zum neuen Tab wechseln</source>
+      <translation>Zum neuen Tab wechseln</translation>
+    </message>
+    <message>
       <source>Legt fest, welcher Editor bei der Aktion "Bearbeiten" verwendet wird.</source>
       <translation>Legt fest, welcher Editor bei der Aktion "Bearbeiten" verwendet wird.</translation>
     </message>

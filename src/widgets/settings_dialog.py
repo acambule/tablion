@@ -52,6 +52,7 @@ class SettingsDialog(QDialog):
         self._default_editor_line_edit = self.ui.findChild(QLineEdit, "defaultEditorLineEdit")
         self._language_preference_combo = self.ui.findChild(QComboBox, "languagePreferenceCombo")
         self._group_creation_behavior_combo = self.ui.findChild(QComboBox, "groupCreationBehaviorCombo")
+        self._middle_click_tab_behavior_combo = self.ui.findChild(QComboBox, "middleClickTabBehaviorCombo")
         self._app_double_click_behavior_combo = self.ui.findChild(QComboBox, "appDoubleClickBehaviorCombo")
         self._show_group_tab_close_icons_checkbox = self.ui.findChild(QCheckBox, "showGroupTabCloseIconsCheckBox")
         self._show_file_tab_close_icons_checkbox = self.ui.findChild(QCheckBox, "showFileTabCloseIconsCheckBox")
@@ -83,6 +84,12 @@ class SettingsDialog(QDialog):
             behavior_map = {"default_tab": 0, "copy_tabs": 1}
             self._group_creation_behavior_combo.setCurrentIndex(
                 behavior_map.get(self._editor_settings.group_creation_behavior, 0)
+            )
+
+        if self._middle_click_tab_behavior_combo:
+            behavior_map = {"background": 0, "foreground": 1}
+            self._middle_click_tab_behavior_combo.setCurrentIndex(
+                behavior_map.get(self._editor_settings.middle_click_new_tab_behavior, 0)
             )
 
         if self._show_group_tab_close_icons_checkbox:
@@ -143,6 +150,9 @@ class SettingsDialog(QDialog):
         if self._group_creation_behavior_combo:
             behavior = "copy_tabs" if self._group_creation_behavior_combo.currentIndex() == 1 else "default_tab"
             self._editor_settings.update_group_creation_behavior(behavior)
+        if self._middle_click_tab_behavior_combo:
+            behavior = "foreground" if self._middle_click_tab_behavior_combo.currentIndex() == 1 else "background"
+            self._editor_settings.update_middle_click_new_tab_behavior(behavior)
         if self._show_group_tab_close_icons_checkbox:
             self._editor_settings.update_show_group_tab_close_icons(self._show_group_tab_close_icons_checkbox.isChecked())
         if self._show_file_tab_close_icons_checkbox:

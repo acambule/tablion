@@ -551,14 +551,21 @@ class PaneController(QObject):
             self.tab_bar.setCurrentIndex(index)
             self.apply_tab_state(state, push_history=False)
 
-    def open_path_in_new_tab(self, path):
+    def open_path_in_new_tab(self, path, activate=True):
         target_path = QDir.cleanPath(str(path or ""))
         if not target_path or not QDir(target_path).exists():
             return
 
-        new_index = len(self.tab_states) + 1
-        self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", target_path)
-        self.tab_bar.setCurrentIndex(len(self.tab_states) - 1)
+        tab_title = Path(target_path).name or target_path
+        self.add_tab(tab_title, target_path)
+        if activate:
+            self.tab_bar.setCurrentIndex(len(self.tab_states) - 1)
+
+    def _middle_click_opens_foreground_tab(self) -> bool:
+        if self._editor_settings is None:
+            return False
+        behavior = str(getattr(self._editor_settings, "middle_click_new_tab_behavior", "background") or "background").strip().lower()
+        return behavior == "foreground"
 
     def close_tab(self, index):
         if len(self.tab_states) <= 1:
@@ -823,6 +830,20 @@ class PaneController(QObject):
                     self._selection_rubber_band.hide()
                 self._selection_rubber_origin = None
                 self._selection_rubber_viewport = None
+
+            if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.MiddleButton:
+                index = watched_view.indexAt(event.position().toPoint())
+                if not index.isValid():
+                    return False
+
+                path = QDir.cleanPath(self.model.filePath(index))
+                if not path or not Path(path).exists():
+                    return False
+                if not self.model.isDir(index):
+                    return False
+
+                self.open_path_in_new_tab(path, activate=self._middle_click_opens_foreground_tab())
+                return True
 
             if event.type() == QEvent.Type.DragEnter:
                 source_paths, target_dir = self.resolve_drop_context(

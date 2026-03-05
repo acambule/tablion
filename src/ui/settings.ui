@@ -210,6 +210,27 @@
                           </item>
                          </widget>
                         </item>
+                        <item row="3" column="0">
+                         <widget class="QLabel" name="middleClickTabBehaviorLabel">
+                          <property name="text">
+                           <string>Mittelklick auf Ordner</string>
+                          </property>
+                         </widget>
+                        </item>
+                        <item row="3" column="1">
+                         <widget class="QComboBox" name="middleClickTabBehaviorCombo">
+                          <item>
+                           <property name="text">
+                            <string>Im Hintergrundtab öffnen</string>
+                           </property>
+                          </item>
+                          <item>
+                           <property name="text">
+                            <string>Zum neuen Tab wechseln</string>
+                           </property>
+                          </item>
+                         </widget>
+                        </item>
                       </layout>
                      </item>
                      <item>
