@@ -25,16 +25,16 @@ ROLE_ENTRY_SOURCE = Qt.ItemDataRole.UserRole + 9
 DEFAULT_NAVIGATOR_DATA = {
     "groups": [
         {
-            "name": "Orte",
+            "name": "Places",
             "active": True,
             "collapsible": False,
             "expanded": True,
             "icon": "folder-favorites",
             "entries": [
-                {"label": "Persönlicher Ordner", "dynamic": "home", "icon": "user-home", "active": True},
-                {"label": "Papierkorb", "dynamic": "trash", "icon": "user-trash", "active": True},
-                {"label": "Arbeitsfläche", "dynamic": "desktop", "icon": "user-desktop", "active": True},
-                {"label": "Dokumente", "dynamic": "documents", "icon": "folder-documents", "active": True},
+                {"label": "Home", "dynamic": "home", "icon": "user-home", "active": True},
+                {"label": "Trash", "dynamic": "trash", "icon": "user-trash", "active": True},
+                {"label": "Desktop", "dynamic": "desktop", "icon": "user-desktop", "active": True},
+                {"label": "Documents", "dynamic": "documents", "icon": "folder-documents", "active": True},
                 {"label": "Downloads", "dynamic": "downloads", "icon": "folder-download", "active": True},
             ],
         },
@@ -47,7 +47,7 @@ DEFAULT_NAVIGATOR_DATA = {
             "entries": [],
         },
         {
-            "name": "Laufwerke",
+            "name": "Drives",
             "active": True,
             "collapsible": True,
             "expanded": True,
@@ -91,9 +91,43 @@ class NavigatorManager(QObject):
         self.widget = widget
         self.data_path = data_path
         self.loaded_data = {"groups": []}
-        self.allowed_drop_groups = {"Orte", "Cloud"}
+        self.allowed_drop_groups = {"Places", "Cloud"}
         self._drop_indicator_item = None
         self._drop_indicator_draw_bottom = False
+
+    def _normalize_group_name(self, name: str) -> str:
+        text = str(name or "").strip().lower()
+        mapping = {
+            "places": "Places",
+            "orte": "Places",
+            "cloud": "Cloud",
+            "drives": "Drives",
+            "laufwerke": "Drives",
+        }
+        return mapping.get(text, str(name or "").strip())
+
+    def _canonical_system_label(self, dynamic_token: str, raw_label: str) -> str:
+        token = str(dynamic_token or "").strip().lower()
+        if token == "home":
+            return "Home"
+        if token == "trash":
+            return "Trash"
+        if token == "desktop":
+            return "Desktop"
+        if token == "documents":
+            return "Documents"
+        if token == "downloads":
+            return "Downloads"
+
+        text = str(raw_label or "").strip().lower()
+        mapping = {
+            "persönlicher ordner": "Home",
+            "papierkorb": "Trash",
+            "arbeitsfläche": "Desktop",
+            "dokumente": "Documents",
+            "downloads": "Downloads",
+        }
+        return mapping.get(text, str(raw_label or "").strip())
 
     def setup(self):
         self.widget.setHeaderHidden(True)
@@ -209,7 +243,7 @@ class NavigatorManager(QObject):
         else:
             return None, 0
 
-        group_name = str(group_item.data(0, ROLE_GROUP_NAME) or group_item.text(0) or '').strip()
+        group_name = self._normalize_group_name(group_item.data(0, ROLE_GROUP_NAME) or group_item.text(0) or '')
         if group_name not in self.allowed_drop_groups:
             return None, 0
 
@@ -366,10 +400,12 @@ class NavigatorManager(QObject):
                 spacer_item.setSizeHint(0, QSize(0, 6))
                 self.widget.addTopLevelItem(spacer_item)
 
-            group_name = group.get('name', 'Gruppe')
+            raw_group_name = group.get('name', 'Gruppe')
+            canonical_group_name = self._normalize_group_name(raw_group_name)
+            group_name = app_tr('NavigatorManager', canonical_group_name)
             group_item = QTreeWidgetItem([group_name])
             group_item.setData(0, ROLE_KIND, 'group')
-            group_item.setData(0, ROLE_GROUP_NAME, group_name)
+            group_item.setData(0, ROLE_GROUP_NAME, canonical_group_name)
             group_item.setData(0, ROLE_ICON, group.get('icon', ''))
             group_item.setData(0, ROLE_COLLAPSIBLE, bool(group.get('collapsible', True)))
             group_item.setData(0, ROLE_DYNAMIC, group.get('dynamic', ''))
@@ -394,7 +430,7 @@ class NavigatorManager(QObject):
             else:
                 entries = group.get('entries', [])
 
-            if str(group_name).strip() == 'Orte' and isinstance(entries, list):
+            if canonical_group_name == 'Places' and isinstance(entries, list):
                 system_entries = []
                 custom_entries = []
                 for entry in entries:
@@ -438,15 +474,23 @@ class NavigatorManager(QObject):
                 if not resolved_entry:
                     continue
 
-                label = resolved_entry.get('label', 'Eintrag')
+                raw_label = resolved_entry.get('label', '')
+                dynamic_token = resolved_entry.get('dynamic', '')
+                source = str(resolved_entry.get('source', 'system')).strip()
+                if source == 'system':
+                    effective_label = self._canonical_system_label(dynamic_token, raw_label)
+                    label = app_tr('NavigatorManager', effective_label)
+                else:
+                    effective_label = str(raw_label or '').strip()
+                    label = effective_label
                 path = os.path.expanduser(resolved_entry.get('path', ''))
                 entry_item = QTreeWidgetItem([label])
+                entry_item.setData(0, ROLE_ENTRY_KEY, effective_label)
                 entry_item.setData(0, ROLE_KIND, 'entry')
                 entry_item.setData(0, ROLE_PATH, path)
                 entry_item.setData(0, ROLE_ICON, resolved_entry.get('icon', ''))
                 entry_item.setData(0, ROLE_ENTRY_TYPE, 'entry')
                 entry_item.setData(0, ROLE_ENTRY_DYNAMIC, resolved_entry.get('dynamic', ''))
-                entry_item.setData(0, ROLE_ENTRY_KEY, entry_key)
                 entry_item.setData(0, ROLE_ENTRY_SOURCE, resolved_entry.get('source', 'system'))
                 entry_flags = entry_item.flags()
                 entry_flags |= Qt.ItemFlag.ItemIsDragEnabled
@@ -466,6 +510,20 @@ class NavigatorManager(QObject):
             group_item.setExpanded(group.get('expanded', True) if collapsible else True)
             rendered_groups += 1
 
+    def retranslate(self):
+        """Reapply translations to all navigator items."""
+        for top in range(self.widget.topLevelItemCount()):
+            group_item = self.widget.topLevelItem(top)
+            raw_group = group_item.data(0, ROLE_GROUP_NAME)
+            if isinstance(raw_group, str) and raw_group:
+                group_item.setText(0, app_tr('NavigatorManager', raw_group))
+            for child_idx in range(group_item.childCount()):
+                child = group_item.child(child_idx)
+                source = str(child.data(0, ROLE_ENTRY_SOURCE) or 'system').strip()
+                raw_label = child.data(0, ROLE_ENTRY_KEY)
+                if source == 'system' and isinstance(raw_label, str) and raw_label:
+                    child.setText(0, app_tr('NavigatorManager', raw_label))
+
     def resolve_icon(self, icon_name, fallback_standard_icon):
         if icon_name:
             icon = QIcon.fromTheme(icon_name)
@@ -479,7 +537,7 @@ class NavigatorManager(QObject):
             group_item = self.widget.topLevelItem(top_index)
             if group_item.data(0, ROLE_KIND) != 'group':
                 continue
-            group_name = group_item.data(0, ROLE_GROUP_NAME) or group_item.text(0)
+            group_name = self._normalize_group_name(group_item.data(0, ROLE_GROUP_NAME) or group_item.text(0))
             dynamic_mode = group_item.data(0, ROLE_DYNAMIC) or ""
             group_data = {
                 "name": group_name,
@@ -528,11 +586,11 @@ class NavigatorManager(QObject):
 
                     group_data["entries"].append(entry_data)
 
-            visible_groups[group_name] = group_data
+            visible_groups[self._normalize_group_name(group_name)] = group_data
 
         groups = []
         for source_group in self.loaded_data.get('groups', []):
-            source_name = source_group.get('name', 'Gruppe')
+            source_name = self._normalize_group_name(source_group.get('name', 'Gruppe'))
             if source_name in visible_groups:
                 visible_group = visible_groups[source_name]
                 if 'entries' in visible_group:
@@ -588,7 +646,7 @@ class NavigatorManager(QObject):
             return
 
         if kind == 'group':
-            group_name = str(item.data(0, ROLE_GROUP_NAME) or item.text(0) or '').strip()
+            group_name = self._normalize_group_name(item.data(0, ROLE_GROUP_NAME) or item.text(0) or '')
             inactive_entries = self.get_inactive_system_entries(group_name)
             if not inactive_entries:
                 return
@@ -603,7 +661,7 @@ class NavigatorManager(QObject):
             )
             activate_actions = {}
             show_all_action = None
-            if group_name == 'Orte':
+            if group_name == 'Places':
                 show_all_action = activate_submenu.addAction(
                     self.resolve_icon('view-visible', QStyle.StandardPixmap.SP_DialogApplyButton),
                     app_tr('NavigatorManager', 'Alle einblenden'),
@@ -612,7 +670,7 @@ class NavigatorManager(QObject):
             for entry in inactive_entries:
                 action = activate_submenu.addAction(
                     self.resolve_icon(entry.get('icon', ''), QStyle.StandardPixmap.SP_DirIcon),
-                    entry['label'],
+                    app_tr('NavigatorManager', self._canonical_system_label('', entry.get('label', ''))),
                 )
                 activate_actions[action] = entry['key']
 
@@ -680,7 +738,7 @@ class NavigatorManager(QObject):
         if parent is None:
             return
 
-        group_name = str(parent.data(0, ROLE_GROUP_NAME) or parent.text(0) or '').strip()
+        group_name = self._normalize_group_name(parent.data(0, ROLE_GROUP_NAME) or parent.text(0) or '')
         entry_key = item.data(0, ROLE_ENTRY_KEY)
         if not group_name or not entry_key:
             return
@@ -688,9 +746,10 @@ class NavigatorManager(QObject):
         self.set_system_entry_active_by_key(group_name, str(entry_key), bool(active))
 
     def set_system_entry_active_by_key(self, group_name, entry_key, active):
+        group_name = self._normalize_group_name(group_name)
         groups = self.loaded_data.get('groups', []) if isinstance(self.loaded_data, dict) else []
         for group in groups:
-            if str(group.get('name', '')).strip() != group_name:
+            if self._normalize_group_name(group.get('name', '')) != group_name:
                 continue
 
             entries = group.get('entries', [])
@@ -717,6 +776,7 @@ class NavigatorManager(QObject):
                 return
 
     def set_multiple_system_entries_active_by_keys(self, group_name, entry_keys, active):
+        group_name = self._normalize_group_name(group_name)
         keys = set(str(key) for key in entry_keys if key)
         if not keys:
             return
@@ -724,7 +784,7 @@ class NavigatorManager(QObject):
         groups = self.loaded_data.get('groups', []) if isinstance(self.loaded_data, dict) else []
         changed = False
         for group in groups:
-            if str(group.get('name', '')).strip() != group_name:
+            if self._normalize_group_name(group.get('name', '')) != group_name:
                 continue
 
             entries = group.get('entries', [])
@@ -756,9 +816,10 @@ class NavigatorManager(QObject):
         self.build_from_data(self.loaded_data)
 
     def get_inactive_system_entries(self, group_name):
+        group_name = self._normalize_group_name(group_name)
         groups = self.loaded_data.get('groups', []) if isinstance(self.loaded_data, dict) else []
         for group in groups:
-            if str(group.get('name', '')).strip() != group_name:
+            if self._normalize_group_name(group.get('name', '')) != group_name:
                 continue
 
             entries = group.get('entries', [])
@@ -778,7 +839,7 @@ class NavigatorManager(QObject):
                 if entry.get('active', True):
                     continue
 
-                label = str(entry.get('label') or entry.get('dynamic') or 'Eintrag')
+                label = self._canonical_system_label(entry.get('dynamic', ''), entry.get('label') or '')
                 result.append(
                     {
                         'label': label,
@@ -817,26 +878,22 @@ class NavigatorManager(QObject):
 
         if dynamic_token == 'home':
             dynamic_entry['path'] = os.path.expanduser('~')
-            dynamic_entry['label'] = dynamic_entry['label'] or 'Persönlicher Ordner'
+            # keep raw label empty so build_from_data will use token for translation
             dynamic_entry['icon'] = dynamic_entry['icon'] or 'user-home'
         elif dynamic_token == 'trash':
             dynamic_entry['path'] = os.path.expanduser('~/.local/share/Trash/files')
-            dynamic_entry['label'] = dynamic_entry['label'] or 'Papierkorb'
             dynamic_entry['icon'] = dynamic_entry['icon'] or 'user-trash'
         elif dynamic_token == 'desktop':
             desktop_path = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation)
             dynamic_entry['path'] = desktop_path or os.path.expanduser('~/Desktop')
-            dynamic_entry['label'] = dynamic_entry['label'] or 'Arbeitsfläche'
             dynamic_entry['icon'] = dynamic_entry['icon'] or 'user-desktop'
         elif dynamic_token == 'documents':
             documents_path = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
             dynamic_entry['path'] = documents_path or os.path.expanduser('~/Documents')
-            dynamic_entry['label'] = dynamic_entry['label'] or 'Dokumente'
             dynamic_entry['icon'] = dynamic_entry['icon'] or 'folder-documents'
         elif dynamic_token == 'downloads':
             downloads_path = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
             dynamic_entry['path'] = downloads_path or os.path.expanduser('~/Downloads')
-            dynamic_entry['label'] = dynamic_entry['label'] or 'Downloads'
             dynamic_entry['icon'] = dynamic_entry['icon'] or 'folder-download'
         else:
             return entry

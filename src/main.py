@@ -220,7 +220,9 @@ class MainWindow(QMainWindow):
         self.update_split_active_highlight()
         active_pane = self.get_active_pane()
         if active_pane:
-            self.update_window_title(active_pane.current_path())
+            active_path = active_pane.current_path()
+            self.update_window_title(active_path)
+            self._update_temporary_context_notice(active_path)
             self.update_nav_buttons()
 
     def on_group_tab_changed(self, _index):
@@ -228,9 +230,41 @@ class MainWindow(QMainWindow):
         self.update_split_active_highlight()
         active_pane = self.get_active_pane()
         if not active_pane:
+            self._update_temporary_context_notice("")
             return
-        self.update_window_title(active_pane.current_path())
+        active_path = active_pane.current_path()
+        self.update_window_title(active_path)
+        self._update_temporary_context_notice(active_path)
         self.update_nav_buttons()
+
+    def _is_temporary_path(self, path: str) -> bool:
+        candidate = Path(QDir.cleanPath(str(path or ""))).expanduser()
+        tmp_roots = (Path("/tmp"), Path("/var/tmp"))
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+
+        for root in tmp_roots:
+            try:
+                root_resolved = root.resolve()
+            except OSError:
+                root_resolved = root
+            if resolved == root_resolved or root_resolved in resolved.parents:
+                return True
+        return False
+
+    def _update_temporary_context_notice(self, path: str) -> None:
+        if not hasattr(self.ui, "statusBar"):
+            return
+        status_bar = self.ui.statusBar()
+        if status_bar is None:
+            return
+
+        if self._is_temporary_path(path):
+            status_bar.showMessage(app_tr("MainWindow", "Hinweis: Im temporären Verzeichnis wird dauerhaft gelöscht."))
+        else:
+            status_bar.clearMessage()
 
     def render_active_group_pane(self):
         if not self.group_tabs or not self.group_content_host:
@@ -690,6 +724,7 @@ class MainWindow(QMainWindow):
         if self.sender() != self.get_active_pane():
             return
         self.update_window_title(path)
+        self._update_temporary_context_notice(path)
 
     def on_pane_navigation_changed(self, _can_back, _can_up):
         if self.sender() != self.get_active_pane():
@@ -1104,6 +1139,8 @@ class MainWindow(QMainWindow):
         apply_localization(app, language_preference)
         if self.group_controller is not None:
             self.group_controller.retranslate_panes()
+        if self.navigator_manager is not None:
+            self.navigator_manager.retranslate()
         if self._settings_dialog is not None and self._settings_dialog.isVisible():
             self._settings_dialog.close()
             self._settings_dialog = None

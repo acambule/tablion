@@ -675,6 +675,10 @@ class PaneController(QObject):
 
         if watched in watched_views:
             if event.type() == QEvent.Type.KeyPress:
+                if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    current_view = self.active_item_view()
+                    if current_view is not None and current_view.state() == QAbstractItemView.State.EditingState:
+                        return False
                 if event.key() == Qt.Key.Key_Delete:
                     permanent_delete = True if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) else None
                     self.delete_selected_paths(permanent=permanent_delete)
@@ -695,7 +699,7 @@ class PaneController(QObject):
                     self.duplicate_selection()
                     return True
                 if event.key() == Qt.Key.Key_F5:
-                    self.refresh_current_directory()
+                    self.refresh_current_directory(force_rescan=True)
                     return True
                 if event.key() == Qt.Key.Key_F2:
                     if self.selected_count() <= 1:
@@ -725,6 +729,9 @@ class PaneController(QObject):
             if watched_view is None:
                 return False
             if event.type() == QEvent.Type.KeyPress:
+                if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    if watched_view is not None and watched_view.state() == QAbstractItemView.State.EditingState:
+                        return False
                 if event.key() == Qt.Key.Key_Delete:
                     permanent_delete = True if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) else None
                     self.delete_selected_paths(permanent=permanent_delete)
@@ -745,7 +752,7 @@ class PaneController(QObject):
                     self.duplicate_selection()
                     return True
                 if event.key() == Qt.Key.Key_F5:
-                    self.refresh_current_directory()
+                    self.refresh_current_directory(force_rescan=True)
                     return True
                 if event.key() == Qt.Key.Key_F2:
                     if self.selected_count() <= 1:
@@ -964,15 +971,18 @@ class PaneController(QObject):
         paths = self.selected_paths()
         if not paths:
             return
-        target = paths[0]
-        if Path(target).is_dir():
+        target = QDir.cleanPath(str(paths[0]))
+        target_path = Path(target)
+        if not target_path.exists():
+            return
+        if target_path.is_dir():
             self.navigate_to(target)
             return
         if self._is_application_target(target):
             behavior = "start"
             if self._editor_settings is not None:
                 behavior = self._editor_settings.application_double_click_behavior
-            if behavior == "edit" and Path(target).suffix.lower() in self._EDITABLE_EXTENSIONS:
+            if behavior == "edit" and target_path.suffix.lower() in self._EDITABLE_EXTENSIONS:
                 self.open_selection_in_editor()
                 return
         QDesktopServices.openUrl(QUrl.fromLocalFile(target))
@@ -981,8 +991,10 @@ class PaneController(QObject):
         paths = self.selected_paths()
         if not paths:
             return
-        target = paths[0]
+        target = QDir.cleanPath(str(paths[0]))
         path_obj = Path(target)
+        if not path_obj.exists():
+            return
         if path_obj.is_dir():
             return
 
@@ -1306,6 +1318,19 @@ class PaneController(QObject):
 
         return False
 
+    def is_temporary_context(self):
+        current_path = Path(QDir.cleanPath(self.current_directory)).expanduser()
+        tmp_roots = [Path("/tmp").resolve(), Path("/var/tmp").resolve()]
+        try:
+            resolved_current = current_path.resolve()
+        except OSError:
+            resolved_current = current_path
+
+        for root in tmp_roots:
+            if resolved_current == root or root in resolved_current.parents:
+                return True
+        return False
+
     def delete_selected_paths(self, permanent=None):
         selected = self.selected_paths()
         if not selected:
@@ -1318,7 +1343,7 @@ class PaneController(QObject):
             return
 
         if permanent is None:
-            permanent = self.is_trash_context()
+            permanent = self.is_trash_context() or self.is_temporary_context()
 
         if len(existing_selected) == 1:
             target_label = Path(existing_selected[0]).name or existing_selected[0]
@@ -1364,7 +1389,7 @@ class PaneController(QObject):
                 self._cut_paths -= deleted_set
                 self.update_cut_visual_state()
 
-            self.refresh_current_directory()
+            self.refresh_current_directory(force_rescan=True)
             self.filesystemMutationCommitted.emit()
             action_text = (
                 app_tr("PaneController", "dauerhaft gelöscht")
@@ -1623,6 +1648,36 @@ class PaneController(QObject):
     def on_model_file_renamed(self, directory_path, _old_name, _new_name):
         renamed_directory = QDir.cleanPath(str(directory_path))
         current_root = QDir.cleanPath(self.current_directory)
+
+        old_path = QDir.cleanPath(QDir(renamed_directory).filePath(str(_old_name)))
+        new_path = QDir.cleanPath(QDir(renamed_directory).filePath(str(_new_name)))
+
+        if self._pending_created_item_path and QDir.cleanPath(self._pending_created_item_path) == old_path:
+            self._pending_created_item_path = new_path
+
+        active_state = self.get_active_tab_state()
+        if active_state is not None:
+            state_path = QDir.cleanPath(str(active_state.path))
+            if state_path == old_path or state_path.startswith(f"{old_path}/"):
+                suffix = state_path[len(old_path):]
+                updated_path = QDir.cleanPath(f"{new_path}{suffix}")
+
+                active_state.path = updated_path
+                self.current_directory = updated_path
+
+                tab_title = Path(updated_path).name or updated_path
+                active_state.title = tab_title
+                if self.active_tab_index >= 0:
+                    self.tab_bar.setTabText(self.active_tab_index, tab_title)
+                    self.update_tab_visual(self.active_tab_index)
+
+                if self.path_bar:
+                    self.path_bar.set_path(updated_path)
+
+                self.currentPathChanged.emit(updated_path)
+                self.emit_navigation_state()
+                self.filesystemMutationCommitted.emit()
+                return
 
         if renamed_directory == current_root or renamed_directory.startswith(f"{current_root}/"):
             self.filesystemMutationCommitted.emit()
@@ -1894,7 +1949,7 @@ class PaneController(QObject):
 
         chosen = menu.exec(source_view.viewport().mapToGlobal(pos))
         if chosen == action_refresh:
-            self.refresh_current_directory()
+            self.refresh_current_directory(force_rescan=True)
             return
         if chosen == action_new_folder:
             self.create_folder(destination_dir)
@@ -2060,11 +2115,15 @@ class PaneController(QObject):
             return
 
         path = self.model.filePath(index)
-        if self.model.isDir(index):
-            self.navigate_to(path)
+        clean_path = QDir.cleanPath(str(path))
+        if not clean_path or not Path(clean_path).exists():
             return
 
-        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        if self.model.isDir(index):
+            self.navigate_to(clean_path)
+            return
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(clean_path))
 
     def navigate_to(self, path, push_history=True):
         target_path = QDir.cleanPath(path)
@@ -2299,7 +2358,7 @@ class PaneController(QObject):
         if active_view is not None and active_view.isAncestorOf(focused_widget):
             focused_widget.clearFocus()
 
-    def refresh_current_directory(self, preserve_focus=False):
+    def refresh_current_directory(self, preserve_focus=False, force_rescan=False):
         focused_widget = QApplication.focusWidget()
         active_view = self.active_item_view()
         should_restore_focus = bool(
@@ -2308,6 +2367,12 @@ class PaneController(QObject):
         )
 
         self.commit_pending_tree_edit()
+        if force_rescan:
+            # Force QFileSystemModel cache invalidation by switching root once.
+            try:
+                self.model.setRootPath(QDir.rootPath())
+            except RuntimeError:
+                pass
         self.navigate_to(self.current_directory, push_history=False)
         self.apply_current_sort()
         self.force_resort()

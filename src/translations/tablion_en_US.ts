@@ -208,6 +208,7 @@
     <message><source>Alle Tabgruppen und Navigator-Einträge werden auf Werkseinstellung zurückgesetzt. Fortfahren?</source><translation>All tab groups and navigator entries will be reset to factory settings. Continue?</translation></message>
     <message><source>Tablion wurde auf Werkseinstellung zurückgesetzt.</source><translation>Tablion has been reset to factory settings.</translation></message>
     <message><source>Zurücksetzen auf Werkseinstellung ist fehlgeschlagen.</source><translation>Reset to factory settings failed.</translation></message>
+    <message><source>Hinweis: Im temporären Verzeichnis wird dauerhaft gelöscht.</source><translation>Note: In temporary directories, items are deleted permanently.</translation></message>
   </context>
 
   <context>
@@ -269,6 +270,38 @@
 
   <context>
     <name>NavigatorManager</name>
+    <message>
+      <source>Places</source>
+      <translation>Places</translation>
+    </message>
+    <message>
+      <source>Home</source>
+      <translation>Home</translation>
+    </message>
+    <message>
+      <source>Trash</source>
+      <translation>Trash</translation>
+    </message>
+    <message>
+      <source>Desktop</source>
+      <translation>Desktop</translation>
+    </message>
+    <message>
+      <source>Documents</source>
+      <translation>Documents</translation>
+    </message>
+    <message>
+      <source>Downloads</source>
+      <translation>Downloads</translation>
+    </message>
+    <message>
+      <source>Cloud</source>
+      <translation>Cloud</translation>
+    </message>
+    <message>
+      <source>Drives</source>
+      <translation>Drives</translation>
+    </message>
     <message><source>Umbenennen</source><translation>Rename</translation></message>
     <message><source>Löschen</source><translation>Delete</translation></message>
     <message><source>Ausblenden</source><translation>Hide</translation></message>

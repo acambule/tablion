@@ -208,6 +208,7 @@
     <message><source>Alle Tabgruppen und Navigator-Einträge werden auf Werkseinstellung zurückgesetzt. Fortfahren?</source><translation>Alle Tabgruppen und Navigator-Einträge werden auf Werkseinstellung zurückgesetzt. Fortfahren?</translation></message>
     <message><source>Tablion wurde auf Werkseinstellung zurückgesetzt.</source><translation>Tablion wurde auf Werkseinstellung zurückgesetzt.</translation></message>
     <message><source>Zurücksetzen auf Werkseinstellung ist fehlgeschlagen.</source><translation>Zurücksetzen auf Werkseinstellung ist fehlgeschlagen.</translation></message>
+    <message><source>Hinweis: Im temporären Verzeichnis wird dauerhaft gelöscht.</source><translation>Hinweis: Im temporären Verzeichnis wird dauerhaft gelöscht.</translation></message>
   </context>
 
   <context>
@@ -215,6 +216,14 @@
     <message><source>Gruppe</source><translation>Gruppe</translation></message>
     <message><source>Gruppe löschen</source><translation>Gruppe löschen</translation></message>
     <message><source>Soll die Gruppe '{group_name}' wirklich gelöscht werden?</source><translation>Soll die Gruppe '{group_name}' wirklich gelöscht werden?</translation></message>
+    <message><source>Places</source><translation>Orte</translation></message>
+    <message><source>Home</source><translation>Persönlicher Ordner</translation></message>
+    <message><source>Trash</source><translation>Papierkorb</translation></message>
+    <message><source>Desktop</source><translation>Arbeitsfläche</translation></message>
+    <message><source>Documents</source><translation>Dokumente</translation></message>
+    <message><source>Downloads</source><translation>Downloads</translation></message>
+    <message><source>Cloud</source><translation>Cloud</translation></message>
+    <message><source>Drives</source><translation>Laufwerke</translation></message>
   </context>
 
   <context>
@@ -269,6 +278,38 @@
 
   <context>
     <name>NavigatorManager</name>
+    <message>
+      <source>Places</source>
+      <translation>Orte</translation>
+    </message>
+    <message>
+      <source>Home</source>
+      <translation>Persönlicher Ordner</translation>
+    </message>
+    <message>
+      <source>Trash</source>
+      <translation>Papierkorb</translation>
+    </message>
+    <message>
+      <source>Desktop</source>
+      <translation>Arbeitsfläche</translation>
+    </message>
+    <message>
+      <source>Documents</source>
+      <translation>Dokumente</translation>
+    </message>
+    <message>
+      <source>Downloads</source>
+      <translation>Downloads</translation>
+    </message>
+    <message>
+      <source>Cloud</source>
+      <translation>Cloud</translation>
+    </message>
+    <message>
+      <source>Drives</source>
+      <translation>Laufwerke</translation>
+    </message>
     <message><source>Umbenennen</source><translation>Umbenennen</translation></message>
     <message><source>Löschen</source><translation>Löschen</translation></message>
     <message><source>Ausblenden</source><translation>Ausblenden</translation></message>
