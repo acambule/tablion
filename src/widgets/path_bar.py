@@ -41,6 +41,7 @@ class PathBar(QWidget):
         self._crumb_arrow_paths = {}
         self._crumb_press_pos = QPoint()
         self._crumb_drag_button = None
+        self._outside_click_cancel_active = False
 
         self._crumbs_widget = QWidget(self)
         self._crumbs_widget.setObjectName("crumbsSurface")
@@ -171,6 +172,34 @@ class PathBar(QWidget):
         self._edit_button.setVisible(not is_edit_mode)
         self._accept_button.setVisible(is_edit_mode)
         self._cancel_button.setVisible(is_edit_mode)
+        self._set_outside_click_cancel(is_edit_mode)
+
+    def _set_outside_click_cancel(self, active):
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        if active and not self._outside_click_cancel_active:
+            app.installEventFilter(self)
+            self._outside_click_cancel_active = True
+            return
+
+        if not active and self._outside_click_cancel_active:
+            app.removeEventFilter(self)
+            self._outside_click_cancel_active = False
+
+    def _is_inside_widget(self, widget, global_pos):
+        if widget is None:
+            return False
+        local_pos = widget.mapFromGlobal(global_pos)
+        return widget.rect().contains(local_pos)
+
+    def _event_global_pos(self, event):
+        if hasattr(event, "globalPosition"):
+            return event.globalPosition().toPoint()
+        if hasattr(event, "globalPos"):
+            return event.globalPos()
+        return None
 
     def _on_return_pressed(self):
         self._accept_edit_mode()
@@ -254,6 +283,25 @@ class PathBar(QWidget):
         self._update_completions(selected, force_popup=True)
 
     def eventFilter(self, watched, event):
+        app = QApplication.instance()
+        if (
+            self._outside_click_cancel_active
+            and app is not None
+            and event.type() == QEvent.Type.MouseButtonPress
+        ):
+            global_pos = self._event_global_pos(event)
+            if global_pos is None:
+                return False
+
+            popup = self._completer.popup() if self._completer else None
+            if self._is_inside_widget(self, global_pos):
+                return False
+            if self._is_inside_widget(popup, global_pos):
+                return False
+
+            self._cancel_edit_mode()
+            return False
+
         if watched in self._crumb_buttons:
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self._crumb_press_pos = event.position().toPoint()
