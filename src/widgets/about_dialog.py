@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import shutil
 import sys
+from html import escape
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtGui import QIcon
@@ -107,10 +109,22 @@ class AboutDialog(QDialog):
 
         # populate paths
         try:
+            nav_label = app_tr("AboutDialog", "Navigator-Daten:")
+            session_label = app_tr("AboutDialog", "Sitzungsdaten:")
+            navigator_text = str(navigator_data_path)
+            session_text = str(session_data_path)
+            navigator_href = f"tablion-path://{quote(navigator_text)}"
+            session_href = f"tablion-path://{quote(session_text)}"
             self.infoLabel.setText(
-                f"{app_tr('AboutDialog', 'Navigator-Daten:')}<br>{navigator_data_path}<br><br>"
-                f"{app_tr('AboutDialog', 'Sitzungsdaten:')}<br>{session_data_path}"
+                "<table cellspacing='0' cellpadding='2' style='width:100%;'>"
+                f"<tr><td style='font-weight:600; width: 165px;'>{escape(nav_label)}</td>"
+                f"<td><a href=\"{escape(navigator_href)}\">{escape(navigator_text)}</a></td></tr>"
+                f"<tr><td style='font-weight:600; width: 165px;'>{escape(session_label)}</td>"
+                f"<td><a href=\"{escape(session_href)}\">{escape(session_text)}</a></td></tr>"
+                "</table>"
             )
+            self.infoLabel.setOpenExternalLinks(False)
+            self.infoLabel.linkActivated.connect(self._on_path_link_activated)
         except Exception:
             pass
 
@@ -136,7 +150,7 @@ class AboutDialog(QDialog):
         desired_desktop = 'tablion.desktop'
         try:
             if current and str(current).strip() == desired_desktop:
-                self.setDefaultButton.setVisible(False)
+                self.setDefaultButton.setEnabled(False)
         except Exception:
             pass
 
@@ -165,7 +179,7 @@ class AboutDialog(QDialog):
                     except Exception:
                         pass
                 try:
-                    self.setDefaultButton.setVisible(False)
+                    self.setDefaultButton.setEnabled(False)
                 except Exception:
                     pass
 
@@ -231,3 +245,24 @@ class AboutDialog(QDialog):
         except Exception:
             pass
         return self.exec()
+
+    def _on_path_link_activated(self, href: str):
+        try:
+            prefix = "tablion-path://"
+            if not href or not href.startswith(prefix):
+                return
+            target_path = unquote(href[len(prefix):]).strip()
+            if not target_path:
+                return
+
+            parent = self.parent()
+            if parent is None:
+                return
+            if not hasattr(parent, "get_active_pane"):
+                return
+
+            active_pane = parent.get_active_pane()
+            if active_pane and hasattr(active_pane, "open_path_in_new_tab"):
+                active_pane.open_path_in_new_tab(target_path, activate=True)
+        except Exception:
+            pass
