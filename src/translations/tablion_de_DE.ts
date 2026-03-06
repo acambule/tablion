@@ -289,6 +289,23 @@
   </context>
 
   <context>
+    <name>PathBar</name>
+    <message><source>Pfad eingeben …</source><translation>Pfad eingeben …</translation></message>
+    <message><source>Pfad bearbeiten</source><translation>Pfad bearbeiten</translation></message>
+    <message><source>Übernehmen</source><translation>Übernehmen</translation></message>
+    <message><source>Abbrechen</source><translation>Abbrechen</translation></message>
+    <message><source>(Keine Unterordner)</source><translation>(Keine Unterordner)</translation></message>
+    <message><source>Weitere…</source><translation>Weitere…</translation></message>
+    <message><source>Rückgängig</source><translation>Rückgängig</translation></message>
+    <message><source>Wiederholen</source><translation>Wiederholen</translation></message>
+    <message><source>Ausschneiden</source><translation>Ausschneiden</translation></message>
+    <message><source>Kopieren</source><translation>Kopieren</translation></message>
+    <message><source>Einfügen</source><translation>Einfügen</translation></message>
+    <message><source>Löschen</source><translation>Löschen</translation></message>
+    <message><source>Alles auswählen</source><translation>Alles auswählen</translation></message>
+  </context>
+
+  <context>
     <name>NavigatorManager</name>
     <message>
       <source>Places</source>

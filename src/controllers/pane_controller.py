@@ -490,10 +490,8 @@ class PaneController(QObject):
     def _apply_tree_header_translations(self):
         if self.model is None:
             return
-        self.model.setHeaderData(0, Qt.Orientation.Horizontal, app_tr("PaneController", "Name"))
-        self.model.setHeaderData(1, Qt.Orientation.Horizontal, app_tr("PaneController", "Größe"))
-        self.model.setHeaderData(2, Qt.Orientation.Horizontal, app_tr("PaneController", "Typ"))
-        self.model.setHeaderData(3, Qt.Orientation.Horizontal, app_tr("PaneController", "Geändert"))
+        # Header strings come from FileSystemModel.headerData(); emit update on language changes.
+        self.model.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, 3)
 
     def retranslate_ui_texts(self):
         if self.btn_view_mode is not None:
@@ -510,6 +508,9 @@ class PaneController(QObject):
             icons_action.setText(app_tr("PaneController", "Icons"))
         if self._action_reset_view is not None:
             self._action_reset_view.setText(app_tr("PaneController", "Standard"))
+
+        if self.path_bar is not None and hasattr(self.path_bar, "retranslate_ui_texts"):
+            self.path_bar.retranslate_ui_texts()
 
         self._apply_tree_header_translations()
         self.optimize_columns()

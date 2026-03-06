@@ -281,6 +281,23 @@
   </context>
 
   <context>
+    <name>PathBar</name>
+    <message><source>Pfad eingeben …</source><translation>Enter path …</translation></message>
+    <message><source>Pfad bearbeiten</source><translation>Edit path</translation></message>
+    <message><source>Übernehmen</source><translation>Apply</translation></message>
+    <message><source>Abbrechen</source><translation>Cancel</translation></message>
+    <message><source>(Keine Unterordner)</source><translation>(No subfolders)</translation></message>
+    <message><source>Weitere…</source><translation>More…</translation></message>
+    <message><source>Rückgängig</source><translation>Undo</translation></message>
+    <message><source>Wiederholen</source><translation>Redo</translation></message>
+    <message><source>Ausschneiden</source><translation>Cut</translation></message>
+    <message><source>Kopieren</source><translation>Copy</translation></message>
+    <message><source>Einfügen</source><translation>Paste</translation></message>
+    <message><source>Löschen</source><translation>Delete</translation></message>
+    <message><source>Alles auswählen</source><translation>Select all</translation></message>
+  </context>
+
+  <context>
     <name>NavigatorManager</name>
     <message>
       <source>Places</source>

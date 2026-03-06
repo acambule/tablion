@@ -8,10 +8,23 @@ from pathlib import Path
 from debug_log import debug_log
 from PySide6.QtCore import QDir, QMimeData, Qt, QUrl
 from PySide6.QtWidgets import QFileSystemModel
+from localization import app_tr
 
 
 class FileSystemModel(QFileSystemModel):
     INTERNAL_PATHS_MIME = "application/x-tablion-internal-paths"
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            translated_headers = {
+                0: app_tr("PaneController", "Name"),
+                1: app_tr("PaneController", "Größe"),
+                2: app_tr("PaneController", "Typ"),
+                3: app_tr("PaneController", "Geändert"),
+            }
+            if section in translated_headers:
+                return translated_headers[section]
+        return super().headerData(section, orientation, role)
 
     def mimeTypes(self):
         inherited = [

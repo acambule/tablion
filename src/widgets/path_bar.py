@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from localization import app_tr
+
 
 class PathBar(QWidget):
     pathActivated = Signal(str)
@@ -54,10 +56,11 @@ class PathBar(QWidget):
         self._crumbs_widget.installEventFilter(self)
 
         self._edit = QLineEdit(self)
-        self._edit.setPlaceholderText("Pfad eingeben …")
+        self._edit.setPlaceholderText(app_tr("PathBar", "Pfad eingeben …"))
         self._edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._edit.setMinimumHeight(self._bar_height)
         self._edit.setMaximumHeight(self._bar_height)
+        self._edit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self._edit.returnPressed.connect(self._on_return_pressed)
         self._edit.textEdited.connect(self._on_edit_text_edited)
         self._edit.installEventFilter(self)
@@ -87,14 +90,14 @@ class PathBar(QWidget):
         if edit_icon.isNull():
             edit_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
         self._edit_button.setIcon(edit_icon)
-        self._edit_button.setToolTip("Pfad bearbeiten")
+        self._edit_button.setToolTip(app_tr("PathBar", "Pfad bearbeiten"))
         self._edit_button.setAutoRaise(True)
         self._edit_button.setFixedSize(self._bar_height, self._bar_height)
         self._edit_button.clicked.connect(self.start_edit_mode)
 
         self._accept_button = QToolButton(self)
         self._accept_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
-        self._accept_button.setToolTip("Übernehmen")
+        self._accept_button.setToolTip(app_tr("PathBar", "Übernehmen"))
         self._accept_button.setAutoRaise(True)
         self._accept_button.setFixedSize(self._bar_height, self._bar_height)
         self._accept_button.clicked.connect(self._accept_edit_mode)
@@ -102,7 +105,7 @@ class PathBar(QWidget):
 
         self._cancel_button = QToolButton(self)
         self._cancel_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton))
-        self._cancel_button.setToolTip("Abbrechen")
+        self._cancel_button.setToolTip(app_tr("PathBar", "Abbrechen"))
         self._cancel_button.setAutoRaise(True)
         self._cancel_button.setFixedSize(self._bar_height, self._bar_height)
         self._cancel_button.clicked.connect(self._cancel_edit_mode)
@@ -136,6 +139,12 @@ class PathBar(QWidget):
 
         self.set_path(self._current_path)
         self._set_mode("breadcrumbs")
+
+    def retranslate_ui_texts(self):
+        self._edit.setPlaceholderText(app_tr("PathBar", "Pfad eingeben …"))
+        self._edit_button.setToolTip(app_tr("PathBar", "Pfad bearbeiten"))
+        self._accept_button.setToolTip(app_tr("PathBar", "Übernehmen"))
+        self._cancel_button.setToolTip(app_tr("PathBar", "Abbrechen"))
 
     def current_path(self):
         return self._current_path
@@ -416,7 +425,7 @@ class PathBar(QWidget):
             "}"
         )
         if not subdirectories:
-            action = menu.addAction("(Keine Unterordner)")
+            action = menu.addAction(app_tr("PathBar", "(Keine Unterordner)"))
             action.setEnabled(False)
         else:
             visible = subdirectories[: self._max_primary_subdir_items]
@@ -427,7 +436,7 @@ class PathBar(QWidget):
 
             remaining = subdirectories[self._max_primary_subdir_items :]
             if remaining:
-                more_menu = menu.addMenu("Weitere…")
+                more_menu = menu.addMenu(app_tr("PathBar", "Weitere…"))
                 more_menu.setStyleSheet(
                     "QMenu::item {"
                     " padding: 2px 14px;"

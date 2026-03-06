@@ -53,6 +53,12 @@ class MainWindow(QMainWindow):
         self.btn_nav_up = None
         self.action_refresh_tree = None
         self.action_group = None
+        self._action_settings = None
+        self._action_info = None
+        self._action_quit = None
+        self._action_split_single = None
+        self._action_split_2 = None
+        self._action_split_4 = None
         self._settings_dialog = None
         self.plain_tabbing_mode = True
         self._persisted_once = False
@@ -850,23 +856,23 @@ class MainWindow(QMainWindow):
             settings_icon = QIcon.fromTheme("preferences-system")
             if settings_icon.isNull():
                 settings_icon = style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
-            action_settings = burger_menu.addAction(settings_icon, app_tr("MainWindow", "Einstellungen"))
-            action_settings.triggered.connect(self.show_settings_dialog)
+            self._action_settings = burger_menu.addAction(settings_icon, app_tr("MainWindow", "Einstellungen"))
+            self._action_settings.triggered.connect(self.show_settings_dialog)
             info_icon = QIcon.fromTheme("help-about")
             if info_icon.isNull():
                 info_icon = style.standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
-            action_info = burger_menu.addAction(info_icon, app_tr("MainWindow", "Über / Info"))
-            action_info.triggered.connect(self.show_about_info)
+            self._action_info = burger_menu.addAction(info_icon, app_tr("MainWindow", "Über / Info"))
+            self._action_info.triggered.connect(self.show_about_info)
 
             burger_menu.addSeparator()
 
             quit_icon = QIcon.fromTheme("application-exit")
             if quit_icon.isNull():
                 quit_icon = style.standardIcon(QStyle.StandardPixmap.SP_TitleBarCloseButton)
-            action_quit = burger_menu.addAction(quit_icon, app_tr("MainWindow", "Beenden"))
-            action_quit.setShortcut(QKeySequence.StandardKey.Quit)
-            action_quit.setShortcutVisibleInContextMenu(True)
-            action_quit.triggered.connect(self.quit_application)
+            self._action_quit = burger_menu.addAction(quit_icon, app_tr("MainWindow", "Beenden"))
+            self._action_quit.setShortcut(QKeySequence.StandardKey.Quit)
+            self._action_quit.setShortcutVisibleInContextMenu(True)
+            self._action_quit.triggered.connect(self.quit_application)
             self.btn_nav_menu.setMenu(burger_menu)
 
         if self.btn_split_view:
@@ -884,13 +890,13 @@ class MainWindow(QMainWindow):
             self.btn_split_view.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
 
             split_menu = QMenu(self.btn_split_view)
-            action_split_single = split_menu.addAction(app_tr("MainWindow", "Einzelansicht"))
+            self._action_split_single = split_menu.addAction(app_tr("MainWindow", "Einzelansicht"))
             split_menu.addSeparator()
-            action_split_2 = split_menu.addAction(app_tr("MainWindow", "2-Split"))
-            action_split_4 = split_menu.addAction(app_tr("MainWindow", "4-Split"))
-            action_split_single.triggered.connect(lambda: self.on_split_view_selected("single"))
-            action_split_2.triggered.connect(lambda: self.on_split_view_selected("2-split"))
-            action_split_4.triggered.connect(lambda: self.on_split_view_selected("4-split"))
+            self._action_split_2 = split_menu.addAction(app_tr("MainWindow", "2-Split"))
+            self._action_split_4 = split_menu.addAction(app_tr("MainWindow", "4-Split"))
+            self._action_split_single.triggered.connect(lambda: self.on_split_view_selected("single"))
+            self._action_split_2.triggered.connect(lambda: self.on_split_view_selected("2-split"))
+            self._action_split_4.triggered.connect(lambda: self.on_split_view_selected("4-split"))
             self.btn_split_view.setMenu(split_menu)
 
         if self.btn_nav_back:
@@ -910,6 +916,33 @@ class MainWindow(QMainWindow):
             self.btn_nav_up.clicked.connect(self.navigate_up)
 
         self.update_nav_buttons()
+
+    def retranslate_ui_texts(self):
+        if self.btn_nav_menu is not None:
+            self.btn_nav_menu.setToolTip(app_tr("MainWindow", "Menü"))
+        if self._action_settings is not None:
+            self._action_settings.setText(app_tr("MainWindow", "Einstellungen"))
+        if self._action_info is not None:
+            self._action_info.setText(app_tr("MainWindow", "Über / Info"))
+        if self._action_quit is not None:
+            self._action_quit.setText(app_tr("MainWindow", "Beenden"))
+
+        if self.btn_split_view is not None:
+            self.btn_split_view.setToolTip(app_tr("MainWindow", "Split-View"))
+        if self._action_split_single is not None:
+            self._action_split_single.setText(app_tr("MainWindow", "Einzelansicht"))
+        if self._action_split_2 is not None:
+            self._action_split_2.setText(app_tr("MainWindow", "2-Split"))
+        if self._action_split_4 is not None:
+            self._action_split_4.setText(app_tr("MainWindow", "4-Split"))
+
+        if self.btn_nav_back is not None:
+            self.btn_nav_back.setToolTip(app_tr("MainWindow", "Zurück"))
+        if self.btn_nav_up is not None:
+            self.btn_nav_up.setToolTip(app_tr("MainWindow", "Eine Ebene nach oben"))
+        active_pane = self.get_active_pane()
+        if active_pane is not None:
+            self._update_temporary_context_notice(active_pane.current_path())
     
     def setup_navigator(self):
         navigator_widget = self.ui.findChild(QTreeWidget, "treeNavigator")
@@ -1153,6 +1186,7 @@ class MainWindow(QMainWindow):
         if app is None:
             return
         apply_localization(app, language_preference)
+        self.retranslate_ui_texts()
         if self.group_controller is not None:
             self.group_controller.retranslate_panes()
         if self.navigator_manager is not None:
