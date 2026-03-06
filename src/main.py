@@ -52,6 +52,7 @@ class MainWindow(QMainWindow):
         self.btn_nav_back = None
         self.btn_nav_up = None
         self.action_refresh_tree = None
+        self.action_group = None
         self._settings_dialog = None
         self.plain_tabbing_mode = True
         self._persisted_once = False
@@ -446,6 +447,13 @@ class MainWindow(QMainWindow):
     def on_pane_group_requested(self):
         source_pane = self.sender()
         if not isinstance(source_pane, GroupWorkspaceWidget):
+            source_pane = self.get_active_pane()
+        self._group_from_pane(source_pane)
+
+    def _group_from_pane(self, source_pane):
+        if not isinstance(source_pane, GroupWorkspaceWidget):
+            return
+        if not self.can_offer_grouping(source_pane):
             return
 
         moved_states, active_index = source_pane.move_tabs_out_and_reset(QDir.homePath())
@@ -919,6 +927,12 @@ class MainWindow(QMainWindow):
         self.action_refresh_tree.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self.action_refresh_tree.triggered.connect(self.refresh_active_tree_view)
         self.ui.addAction(self.action_refresh_tree)
+
+        self.action_group = QAction(self.ui)
+        self.action_group.setShortcut(QKeySequence("Ctrl+G"))
+        self.action_group.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.action_group.triggered.connect(self.on_pane_group_requested)
+        self.ui.addAction(self.action_group)
     
     def on_nav_click(self, item):
         if not self.navigator_manager:
