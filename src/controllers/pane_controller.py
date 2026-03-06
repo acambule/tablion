@@ -521,6 +521,7 @@ class PaneController(QObject):
         self.set_show_tab_close_icons(bool(getattr(self._editor_settings, "show_file_tab_close_icons", False)))
         self.tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
         self.tab_bar.currentChanged.connect(self.on_tab_changed)
+        self.tab_bar.tabMoved.connect(self.on_tab_moved)
         self.tab_bar.installEventFilter(self)
 
     def set_show_tab_close_icons(self, enabled: bool):
@@ -599,6 +600,34 @@ class PaneController(QObject):
         self.active_tab_index = new_index
         target_state = self.tab_states[new_index]
         self.apply_tab_state(target_state, push_history=False)
+
+    def on_tab_moved(self, from_index, to_index):
+        if from_index == to_index:
+            return
+        if from_index < 0 or to_index < 0:
+            return
+        if from_index >= len(self.tab_states) or to_index >= len(self.tab_states):
+            return
+
+        moved_state = self.tab_states.pop(from_index)
+        self.tab_states.insert(to_index, moved_state)
+
+        if self.active_tab_index == from_index:
+            self.active_tab_index = to_index
+        elif from_index < self.active_tab_index <= to_index:
+            self.active_tab_index -= 1
+        elif to_index <= self.active_tab_index < from_index:
+            self.active_tab_index += 1
+
+        start = min(from_index, to_index)
+        end = max(from_index, to_index)
+        for index in range(start, end + 1):
+            self.update_tab_visual(index)
+
+        current_index = self.tab_bar.currentIndex()
+        if 0 <= current_index < len(self.tab_states):
+            self.active_tab_index = current_index
+            self.apply_tab_state(self.tab_states[current_index], push_history=False)
 
     def eventFilter(self, watched, event):
         if watched == self.tab_bar:
