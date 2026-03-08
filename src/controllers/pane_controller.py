@@ -175,6 +175,8 @@ class PaneController(QObject):
         self._selection_rubber_band = None
         self._selection_rubber_origin = None
         self._selection_rubber_viewport = None
+        configured_columns = getattr(self._editor_settings, "visible_file_tree_columns", [0, 1, 2, 3])
+        self._visible_tree_columns = self._normalize_visible_tree_columns(configured_columns)
 
         self.tab_bar_host = self.widget.findChild(QWidget, "tabBarHost")
         self.tab_bar = None
@@ -213,6 +215,10 @@ class PaneController(QObject):
         self.tree_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.tree_view.setModel(self.model)
         self._apply_tree_header_translations()
+        header = self.tree_view.header()
+        if header is not None:
+            header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            header.customContextMenuRequested.connect(self.on_tree_header_context_menu)
         self.tree_view.setSortingEnabled(True)
         self.tree_view.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.tree_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -493,6 +499,83 @@ class PaneController(QObject):
         # Header strings come from FileSystemModel.headerData(); emit update on language changes.
         self.model.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, 3)
 
+    def _normalize_visible_tree_columns(self, columns):
+        normalized = []
+        if isinstance(columns, list):
+            for item in columns:
+                try:
+                    index = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if index < 0 or index >= self.model.columnCount():
+                    continue
+                if index not in normalized:
+                    normalized.append(index)
+        if not normalized:
+            return [0]
+        return sorted(normalized)
+
+    def _persist_visible_tree_columns(self):
+        if self._editor_settings is None:
+            return
+        if hasattr(self._editor_settings, "update_visible_file_tree_columns"):
+            self._editor_settings.update_visible_file_tree_columns(self._visible_tree_columns)
+
+    def _apply_visible_tree_columns(self):
+        if self.tree_view is None or self.model is None:
+            return
+
+        if self.filetree_view_mode != "details":
+            return
+
+        visible = set(self._visible_tree_columns)
+        for column in range(self.model.columnCount()):
+            self.tree_view.setColumnHidden(column, column not in visible)
+
+    def _tree_column_label(self, column: int) -> str:
+        if self.model is None:
+            return str(column)
+        value = self.model.headerData(column, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
+        return str(value) if value is not None else str(column)
+
+    def on_tree_header_context_menu(self, pos):
+        if self.tree_view is None or self.model is None:
+            return
+
+        header = self.tree_view.header()
+        if header is None:
+            return
+
+        menu = QMenu(header)
+        actions_by_column = {}
+        visible_columns = set(self._visible_tree_columns)
+        visible_count = len(visible_columns)
+
+        for column in range(self.model.columnCount()):
+            action = menu.addAction(self._tree_column_label(column))
+            action.setCheckable(True)
+            is_visible = column in visible_columns
+            action.setChecked(is_visible)
+            if is_visible and visible_count <= 1:
+                action.setEnabled(False)
+            actions_by_column[action] = column
+
+        selected_action = menu.exec(header.mapToGlobal(pos))
+        if selected_action not in actions_by_column:
+            return
+
+        selected_column = actions_by_column[selected_action]
+        if selected_action.isChecked():
+            if selected_column not in self._visible_tree_columns:
+                self._visible_tree_columns.append(selected_column)
+        else:
+            self._visible_tree_columns = [col for col in self._visible_tree_columns if col != selected_column]
+
+        self._visible_tree_columns = self._normalize_visible_tree_columns(self._visible_tree_columns)
+        self._persist_visible_tree_columns()
+        self._apply_visible_tree_columns()
+        self.optimize_columns()
+
     def retranslate_ui_texts(self):
         if self.btn_view_mode is not None:
             self.btn_view_mode.setToolTip(app_tr("PaneController", "Ansicht"))
@@ -513,6 +596,7 @@ class PaneController(QObject):
             self.path_bar.retranslate_ui_texts()
 
         self._apply_tree_header_translations()
+        self._apply_visible_tree_columns()
         self.optimize_columns()
 
     def setup_tab_bar(self):
@@ -2287,8 +2371,7 @@ class PaneController(QObject):
             self.tree_view.setRootIsDecorated(True)
             self.tree_view.setItemsExpandable(True)
             self.tree_view.setIndentation(self._default_indentation)
-            for column in range(self.model.columnCount()):
-                self.tree_view.setColumnHidden(column, False)
+            self._apply_visible_tree_columns()
             self.apply_icon_zoom()
             self.optimize_columns()
             return

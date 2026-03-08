@@ -14,6 +14,7 @@ class EditorSettings:
         self._language_preference = "system"
         self._group_creation_behavior = "default_tab"
         self._middle_click_new_tab_behavior = "background"
+        self._visible_file_tree_columns = [0, 1, 2, 3]
         self.load()
 
     @property
@@ -50,6 +51,29 @@ class EditorSettings:
     def middle_click_new_tab_behavior(self) -> str:
         return self._middle_click_new_tab_behavior
 
+    @property
+    def visible_file_tree_columns(self) -> list[int]:
+        return list(self._visible_file_tree_columns)
+
+    def _normalize_visible_file_tree_columns(self, value) -> list[int]:
+        if not isinstance(value, list):
+            return [0, 1, 2, 3]
+
+        normalized = []
+        for item in value:
+            try:
+                column = int(item)
+            except (TypeError, ValueError):
+                continue
+            if column < 0 or column > 3:
+                continue
+            if column not in normalized:
+                normalized.append(column)
+
+        if not normalized:
+            return [0]
+        return sorted(normalized)
+
     def load(self) -> None:
         if not self.storage_path.exists():
             return
@@ -75,6 +99,9 @@ class EditorSettings:
         middle_click_behavior = str(payload.get("middle_click_new_tab_behavior") or "background").strip().lower()
         if middle_click_behavior in {"background", "foreground"}:
             self._middle_click_new_tab_behavior = middle_click_behavior
+        self._visible_file_tree_columns = self._normalize_visible_file_tree_columns(
+            payload.get("visible_file_tree_columns", [0, 1, 2, 3])
+        )
 
     def save(self) -> None:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,6 +113,7 @@ class EditorSettings:
             "language_preference": self._language_preference,
             "group_creation_behavior": self._group_creation_behavior,
             "middle_click_new_tab_behavior": self._middle_click_new_tab_behavior,
+            "visible_file_tree_columns": list(self._visible_file_tree_columns),
         }
         self.storage_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -142,4 +170,11 @@ class EditorSettings:
         if normalized == self._middle_click_new_tab_behavior:
             return
         self._middle_click_new_tab_behavior = normalized
+        self.save()
+
+    def update_visible_file_tree_columns(self, value) -> None:
+        normalized = self._normalize_visible_file_tree_columns(value)
+        if normalized == self._visible_file_tree_columns:
+            return
+        self._visible_file_tree_columns = normalized
         self.save()
