@@ -18,12 +18,17 @@ def _package_version() -> str:
 
 
 def formatted_version() -> str:
-    display = os.environ.get(DISPLAY_ENV)
-    if display:
-        return display
+    package_version = _package_version()
 
     release = os.environ.get(RELEASE_ENV)
     if release:
-        return f"{_package_version()}-{release}"
+        return f"{package_version}-{release}"
 
-    return _package_version()
+    display = os.environ.get(DISPLAY_ENV)
+    if display:
+        normalized = display.strip()
+        # Guard against stale launcher entries carrying an old full display version.
+        if normalized == package_version or normalized.startswith(f"{package_version}-"):
+            return normalized
+
+    return package_version
