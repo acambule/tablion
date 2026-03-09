@@ -12,7 +12,7 @@ from pathlib import Path
 from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (QApplication, QMainWindow, QTreeWidget, QSplitter, QWidget, QToolButton, QStyle, QMenu, QTabWidget, QVBoxLayout, QSizePolicy, QMessageBox, QFileDialog)
 from PySide6.QtUiTools import QUiLoader
-from PySide6.QtCore import QDir, QEvent, Qt, QTimer, QStandardPaths
+from PySide6.QtCore import QDir, QEvent, Qt, QTimer, QStandardPaths, QUrl
 
 from controllers.group_controller import GroupController
 from debug_log import debug_exception, debug_log, initialize_debug_log
