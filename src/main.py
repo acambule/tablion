@@ -1196,6 +1196,45 @@ class MainWindow(QMainWindow):
             self._settings_dialog = None
             QTimer.singleShot(0, self.show_settings_dialog)
 
+    def handle_activation_paths(self, paths):
+        if not isinstance(paths, list) or not paths:
+            return
+
+        active_pane = self.get_active_pane()
+        for raw_path in paths:
+            candidate = QDir.cleanPath(str(raw_path or ""))
+            if not candidate:
+                continue
+            candidate_path = Path(candidate)
+            if not candidate_path.exists():
+                continue
+
+            open_path = candidate if candidate_path.is_dir() else str(candidate_path.parent)
+            open_path = QDir.cleanPath(open_path)
+            if not open_path or not QDir(open_path).exists():
+                continue
+
+            if active_pane is not None and hasattr(active_pane, "open_path_in_new_tab"):
+                active_pane.open_path_in_new_tab(open_path, activate=True)
+            else:
+                self.create_group_from_context(start_path=open_path)
+                active_pane = self.get_active_pane()
+
+def _collect_launch_paths(argv) -> list[str]:
+    collected: list[str] = []
+    for arg in list(argv)[1:]:
+        value = str(arg or "").strip()
+        if not value or value.startswith("-"):
+            continue
+        url = QUrl(value)
+        if url.isValid() and url.isLocalFile():
+            path = QDir.cleanPath(url.toLocalFile())
+        else:
+            path = QDir.cleanPath(str(Path(value).expanduser()))
+        if path and path not in collected:
+            collected.append(path)
+    return collected
+
 def main(argv=None):
     # Application entry point used by packaging entry-points
     if argv is None:
@@ -1240,8 +1279,12 @@ def main(argv=None):
 
     window = MainWindow()
     app.set_activation_window(window.ui)
+    app.set_activation_handler(window.handle_activation_paths)
     window.ui.setWindowIcon(app.windowIcon())
     window.show()
+    launch_paths = _collect_launch_paths(argv)
+    if launch_paths:
+        QTimer.singleShot(0, lambda: window.handle_activation_paths(launch_paths))
     return app.exec()
 
 
