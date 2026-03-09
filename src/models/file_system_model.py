@@ -13,7 +13,6 @@ from localization import app_tr
 
 class FileSystemModel(QFileSystemModel):
     INTERNAL_PATHS_MIME = "application/x-tablion-internal-paths"
-    GNOME_COPIED_FILES_MIME = "x-special/gnome-copied-files"
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
@@ -53,19 +52,31 @@ class FileSystemModel(QFileSystemModel):
             paths.append(path)
         return paths
 
-    def _stage_path_for_external_drag(self, source_path: str) -> str:
-        source = Path(source_path)
+    def _build_drag_batch_dir(self, source_paths: list[str]) -> Path:
         downloads_dir = Path.home() / "Downloads" / ".tablion-dnd"
         downloads_dir.mkdir(parents=True, exist_ok=True)
-
-        stat = source.stat()
-        digest = hashlib.sha1(f"{source_path}|{stat.st_mtime_ns}|{stat.st_size}".encode("utf-8")).hexdigest()[:12]
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        # Keep original file/folder name to maximize compatibility in targets
-        # (mail clients/web apps often infer handling from basename/extension).
-        drag_batch_dir = downloads_dir / f"{timestamp}-{digest}"
-        drag_batch_dir.mkdir(parents=True, exist_ok=True)
-        target = drag_batch_dir / source.name
+        joined = "\n".join(source_paths)
+        digest = hashlib.sha1(joined.encode("utf-8")).hexdigest()[:12]
+        batch_dir = downloads_dir / f"{timestamp}-{digest}"
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        return batch_dir
+
+    def _next_free_target(self, target: Path) -> Path:
+        if not target.exists():
+            return target
+        stem = target.stem
+        suffix = target.suffix
+        counter = 2
+        while True:
+            candidate = target.with_name(f"{stem} {counter}{suffix}")
+            if not candidate.exists():
+                return candidate
+            counter += 1
+
+    def _stage_path_for_external_drag(self, source_path: str, batch_dir: Path) -> str:
+        source = Path(source_path)
+        target = self._next_free_target(batch_dir / source.name)
 
         if source.is_dir():
             if target.exists():
@@ -91,10 +102,11 @@ class FileSystemModel(QFileSystemModel):
 
         mime_data.setData(self.INTERNAL_PATHS_MIME, "\n".join(source_paths).encode("utf-8"))
 
+        batch_dir = self._build_drag_batch_dir(source_paths)
         export_paths = []
         for path in source_paths:
             try:
-                staged_path = self._stage_path_for_external_drag(path)
+                staged_path = self._stage_path_for_external_drag(path, batch_dir)
                 export_paths.append(staged_path)
                 debug_log(f"DND mimeData: staged '{path}' -> '{staged_path}'")
             except OSError as error:
@@ -105,12 +117,9 @@ class FileSystemModel(QFileSystemModel):
         if urls:
             mime_data.setUrls(urls)
             uri_values = [bytes(url.toEncoded()).decode("utf-8") for url in urls]
-            uri_list_payload = ("\r\n".join(uri_values) + "\r\n").encode("utf-8")
+            # Use LF-only URI list to avoid consumers treating CR as part of filenames.
+            uri_list_payload = ("\n".join(uri_values) + "\n").encode("utf-8")
             mime_data.setData("text/uri-list", uri_list_payload)
-            # Add common compatibility formats for external targets.
-            mime_data.setText("\n".join(uri_values))
-            gnome_payload = ("copy\n" + "\n".join(uri_values) + "\n").encode("utf-8")
-            mime_data.setData(self.GNOME_COPIED_FILES_MIME, gnome_payload)
 
         debug_log(
             f"DND mimeData: export_paths={export_paths[:5]} formats={mime_data.formats()}"

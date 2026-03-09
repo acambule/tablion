@@ -2130,7 +2130,8 @@ class PaneController(QObject):
         mime_data = QMimeData()
         url = QUrl.fromLocalFile(path)
         encoded_uri = bytes(url.toEncoded()).decode("utf-8")
-        mime_data.setData("text/uri-list", (encoded_uri + "\r\n").encode("utf-8"))
+        mime_data.setUrls([url])
+        mime_data.setData("text/uri-list", (encoded_uri + "\n").encode("utf-8"))
 
         drag = QDrag(self.tab_bar)
         drag.setMimeData(mime_data)
