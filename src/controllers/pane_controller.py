@@ -423,6 +423,7 @@ class PaneController(QObject):
 
         self.path_bar = PathBar(self.path_bar_container)
         self.path_bar.pathActivated.connect(self.navigate_to)
+        self.path_bar.pathOpenInNewTab.connect(lambda path: self.open_path_in_new_tab(path, activate=True))
         self.path_bar_container.layout().addWidget(self.path_bar)
 
     def setup_view_mode_button(self):

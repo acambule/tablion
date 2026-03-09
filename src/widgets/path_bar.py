@@ -21,6 +21,7 @@ from localization import app_tr
 
 class PathBar(QWidget):
     pathActivated = Signal(str)
+    pathOpenInNewTab = Signal(str)
 
     def __init__(self, parent=None, bar_height=32, show_edit_button=True):
         super().__init__(parent)
@@ -331,10 +332,21 @@ class PathBar(QWidget):
             if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                 self._crumb_drag_button = None
 
+            if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.MiddleButton:
+                target_path = self._crumb_paths.get(watched)
+                if target_path:
+                    self.pathOpenInNewTab.emit(target_path)
+                    return True
+
         if watched in self._crumb_arrow_buttons:
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self._show_subdirectory_menu(watched)
                 return True
+            if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.MiddleButton:
+                target_path = self._crumb_arrow_paths.get(watched)
+                if target_path:
+                    self.pathOpenInNewTab.emit(target_path)
+                    return True
 
         if watched == self._crumbs_widget and event.type() == QEvent.Type.MouseButtonPress:
             clicked_widget = self._crumbs_widget.childAt(event.position().toPoint())
