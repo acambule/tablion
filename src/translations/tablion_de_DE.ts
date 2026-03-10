@@ -261,6 +261,10 @@
     <message><source>Kopieren</source><translation>Kopieren</translation></message>
     <message><source>Ausschneiden</source><translation>Ausschneiden</translation></message>
     <message><source>Einfügen</source><translation>Einfügen</translation></message>
+    <message><source>Archiv erstellen...</source><translation>Archiv erstellen...</translation></message>
+    <message><source>Entpacken</source><translation>Entpacken</translation></message>
+    <message><source>Hier entpacken</source><translation>Hier entpacken</translation></message>
+    <message><source>Entpacken nach...</source><translation>Entpacken nach...</translation></message>
     <message><source>Bearbeiten</source><translation>Bearbeiten</translation></message>
     <message><source>Umbenennen</source><translation>Umbenennen</translation></message>
     <message><source>Aktualisieren</source><translation>Aktualisieren</translation></message>
@@ -286,6 +290,14 @@
     <message><source>Wiederherstellen fehlgeschlagen: Metadaten fehlen für '{name}'.</source><translation>Wiederherstellen fehlgeschlagen: Metadaten fehlen für '{name}'.</translation></message>
     <message><source>Wiederherstellen fehlgeschlagen für '{name}': {error}</source><translation>Wiederherstellen fehlgeschlagen für '{name}': {error}</translation></message>
     <message><source>{count} Element(e) wiederhergestellt</source><translation>{count} Element(e) wiederhergestellt</translation></message>
+    <message><source>Archiv</source><translation>Archiv</translation></message>
+    <message><source>Archiv speichern unter</source><translation>Archiv speichern unter</translation></message>
+    <message><source>Archiv erstellen fehlgeschlagen</source><translation>Archiv erstellen fehlgeschlagen</translation></message>
+    <message><source>Archiv erstellt: {name}</source><translation>Archiv erstellt: {name}</translation></message>
+    <message><source>Entpacken fehlgeschlagen</source><translation>Entpacken fehlgeschlagen</translation></message>
+    <message><source>Archiv entpackt: {name}</source><translation>Archiv entpackt: {name}</translation></message>
+    <message><source>Archiv entpackt: {count} Elemente</source><translation>Archiv entpackt: {count} Elemente</translation></message>
+    <message><source>Zielordner zum Entpacken wählen</source><translation>Zielordner zum Entpacken wählen</translation></message>
   </context>
 
   <context>
@@ -356,6 +368,14 @@
     <message><source>Papierkorb-Funktion ist nicht verfügbar (send2trash fehlt).</source><translation>Papierkorb-Funktion ist nicht verfügbar (send2trash fehlt).</translation></message>
     <message><source>Neuer Name darf nicht leer sein</source><translation>Neuer Name darf nicht leer sein</translation></message>
     <message><source>new_name darf keinen Pfad enthalten</source><translation>new_name darf keinen Pfad enthalten</translation></message>
+    <message><source>Keine Dateien zum Archivieren ausgewählt</source><translation>Keine Dateien zum Archivieren ausgewählt</translation></message>
+    <message><source>Archivformat zum Erstellen wird nicht unterstützt: {path}</source><translation>Archivformat zum Erstellen wird nicht unterstützt: {path}</translation></message>
+    <message><source>Archiv nicht gefunden: {path}</source><translation>Archiv nicht gefunden: {path}</translation></message>
+    <message><source>Entpacken ist nur für Dateien möglich: {path}</source><translation>Entpacken ist nur für Dateien möglich: {path}</translation></message>
+    <message><source>Archivformat wird nicht unterstützt: {path}</source><translation>Archivformat wird nicht unterstützt: {path}</translation></message>
+    <message><source>Archiv enthält einen ungültigen Pfad: {path}</source><translation>Archiv enthält einen ungültigen Pfad: {path}</translation></message>
+    <message><source>Archiv enthält unsichere Verknüpfungen: {path}</source><translation>Archiv enthält unsichere Verknüpfungen: {path}</translation></message>
+    <message><source>Konnte Zieldatei nicht bestimmen: {path}</source><translation>Konnte Zieldatei nicht bestimmen: {path}</translation></message>
   </context>
 
   <context>

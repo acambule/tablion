@@ -8,7 +8,7 @@ from urllib.parse import unquote
 from PySide6.QtCore import QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex, QProcess
 from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QDesktopServices, QIcon, QDrag, QKeySequence, QPen
 from PySide6.QtUiTools import QUiLoader
-from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QHBoxLayout, QListView, QMenu, QMessageBox, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QWidget, QRubberBand
+from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QFileDialog, QHBoxLayout, QListView, QMenu, QMessageBox, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QWidget, QRubberBand
 
 from localization import app_tr, ask_yes_no
 from debug_log import debug_log
@@ -94,6 +94,13 @@ class PaneController(QObject):
     _CLIPBOARD_MIME_TYPE = "application/x-tablion-copy-paths"
     _CLIPBOARD_OPERATION_MIME_TYPE = "application/x-tablion-clipboard-operation"
     _INTERNAL_DRAG_MIME_TYPE = "application/x-tablion-internal-paths"
+    _ARCHIVE_SAVE_FILTERS = (
+        ("ZIP (*.zip)", ".zip"),
+        ("TAR.GZ (*.tar.gz)", ".tar.gz"),
+        ("TAR.XZ (*.tar.xz)", ".tar.xz"),
+        ("TAR.BZ2 (*.tar.bz2)", ".tar.bz2"),
+        ("TAR (*.tar)", ".tar"),
+    )
 
     def prepare_for_dispose(self):
         if getattr(self, "_dispose_prepared", False):
@@ -1143,6 +1150,43 @@ class PaneController(QObject):
         suffix = Path(paths[0]).suffix.lower()
         return suffix in self._EDITABLE_EXTENSIONS
 
+    def _selected_archive_path(self) -> str | None:
+        paths = self.selected_paths()
+        if len(paths) != 1:
+            return None
+        archive_path = QDir.cleanPath(str(paths[0]))
+        path_obj = Path(archive_path)
+        if not path_obj.exists() or path_obj.is_dir():
+            return None
+        if not self.file_operations.is_supported_archive(path_obj):
+            return None
+        return archive_path
+
+    def _archive_creation_sources(self) -> list[str]:
+        paths = self.selected_paths()
+        if len(paths) < 2:
+            return []
+        return [QDir.cleanPath(str(path)) for path in paths if Path(path).exists()]
+
+    def _default_archive_target_path(self, sources: list[str], suffix: str) -> str:
+        source_paths = [Path(source) for source in sources]
+        parent_counts: dict[Path, int] = {}
+        for source_path in source_paths:
+            parent_counts[source_path.parent] = parent_counts.get(source_path.parent, 0) + 1
+
+        target_parent = max(parent_counts, key=parent_counts.get) if parent_counts else Path(self.current_directory)
+        if len(source_paths) == 2:
+            stem = f"{source_paths[0].stem}-{source_paths[1].stem}"
+        else:
+            stem = app_tr("PaneController", "Archiv")
+        return str(target_parent / f"{stem}{suffix}")
+
+    def _archive_suffix_for_filter(self, selected_filter: str) -> str:
+        for filter_label, suffix in self._ARCHIVE_SAVE_FILTERS:
+            if selected_filter == filter_label:
+                return suffix
+        return ".zip"
+
     def _is_application_target(self, path: str) -> bool:
         path_obj = Path(path)
         if path_obj.is_dir():
@@ -1199,6 +1243,93 @@ class PaneController(QObject):
                 return
 
         QDesktopServices.openUrl(QUrl.fromLocalFile(target))
+
+    def extract_selected_archive(self, destination: str | None = None):
+        archive_path = self._selected_archive_path()
+        if archive_path is None:
+            return
+
+        archive_obj = Path(archive_path)
+        target_directory = QDir.cleanPath(destination or str(archive_obj.parent))
+
+        try:
+            extracted_targets = self.file_operations.extract_archive(archive_obj, target_directory)
+        except (FileExistsError, FileNotFoundError, OSError, ValueError) as error:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Entpacken fehlgeschlagen"),
+                str(error),
+            )
+            return
+
+        self.refresh_current_directory(preserve_focus=True, force_rescan=True)
+        self.filesystemMutationCommitted.emit()
+
+        extracted_count = len(extracted_targets)
+        if extracted_count == 1:
+            self.show_operation_feedback(
+                app_tr("PaneController", "Archiv entpackt: {name}").format(name=extracted_targets[0].name)
+            )
+            return
+
+        self.show_operation_feedback(
+            app_tr("PaneController", "Archiv entpackt: {count} Elemente").format(count=extracted_count)
+        )
+
+    def extract_selected_archive_to_directory(self):
+        archive_path = self._selected_archive_path()
+        if archive_path is None:
+            return
+
+        start_directory = str(Path(archive_path).parent)
+        selected_directory = QFileDialog.getExistingDirectory(
+            self.widget,
+            app_tr("PaneController", "Zielordner zum Entpacken wählen"),
+            start_directory,
+        )
+        if not selected_directory:
+            return
+
+        self.extract_selected_archive(selected_directory)
+
+    def create_archive_from_selection(self):
+        source_paths = self._archive_creation_sources()
+        if not source_paths:
+            return
+
+        default_suffix = ".zip"
+        file_filters = ";;".join(label for label, _ in self._ARCHIVE_SAVE_FILTERS)
+        default_target = self._default_archive_target_path(source_paths, default_suffix)
+        selected_path, selected_filter = QFileDialog.getSaveFileName(
+            self.widget,
+            app_tr("PaneController", "Archiv speichern unter"),
+            default_target,
+            file_filters,
+            self._ARCHIVE_SAVE_FILTERS[0][0],
+        )
+        if not selected_path:
+            return
+
+        suffix = self._archive_suffix_for_filter(selected_filter)
+        archive_path = Path(selected_path)
+        if not archive_path.name.lower().endswith(suffix):
+            archive_path = archive_path.with_name(f"{archive_path.name}{suffix}")
+
+        try:
+            self.file_operations.create_archive(source_paths, archive_path, overwrite=False)
+        except (FileExistsError, FileNotFoundError, OSError, ValueError) as error:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Archiv erstellen fehlgeschlagen"),
+                str(error),
+            )
+            return
+
+        self.refresh_current_directory(preserve_focus=True, force_rescan=True)
+        self.filesystemMutationCommitted.emit()
+        self.show_operation_feedback(
+            app_tr("PaneController", "Archiv erstellt: {name}").format(name=archive_path.name)
+        )
 
     def copy_selection_to_clipboard(self):
         source_paths = self.selected_paths()
@@ -2101,7 +2232,27 @@ class PaneController(QObject):
         action_paste.setShortcut(QKeySequence.StandardKey.Paste)
         action_paste.setShortcutVisibleInContextMenu(True)
 
+        action_create_archive = None
+        archive_creation_sources = self._archive_creation_sources()
+        if archive_creation_sources:
+            archive_icon = QIcon.fromTheme("package-x-generic")
+            if archive_icon.isNull():
+                archive_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_DriveFDIcon)
+            action_create_archive = menu.addAction(archive_icon, app_tr("PaneController", "Archiv erstellen..."))
+
         menu.addSeparator()
+
+        archive_path = self._selected_archive_path()
+        action_extract_here = None
+        action_extract_to = None
+        if archive_path is not None:
+            extract_icon = QIcon.fromTheme("archive-extract")
+            if extract_icon.isNull():
+                extract_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
+            extract_menu = menu.addMenu(extract_icon, app_tr("PaneController", "Entpacken"))
+            action_extract_here = extract_menu.addAction(app_tr("PaneController", "Hier entpacken"))
+            action_extract_to = extract_menu.addAction(app_tr("PaneController", "Entpacken nach..."))
+            menu.addSeparator()
 
         edit_icon = QIcon.fromTheme("accessories-text-editor")
         if edit_icon.isNull():
@@ -2158,8 +2309,17 @@ class PaneController(QObject):
         if chosen == action_duplicate:
             self.duplicate_selection()
             return
+        if chosen == action_create_archive:
+            self.create_archive_from_selection()
+            return
         if chosen == action_paste:
             self.paste_from_clipboard(destination_dir)
+            return
+        if chosen == action_extract_here:
+            self.extract_selected_archive()
+            return
+        if chosen == action_extract_to:
+            self.extract_selected_archive_to_directory()
             return
         if chosen == action_delete:
             self.delete_selected_paths(permanent=None)

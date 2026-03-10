@@ -253,6 +253,10 @@
     <message><source>Kopieren</source><translation>Copy</translation></message>
     <message><source>Ausschneiden</source><translation>Cut</translation></message>
     <message><source>Einfügen</source><translation>Paste</translation></message>
+    <message><source>Archiv erstellen...</source><translation>Create archive...</translation></message>
+    <message><source>Entpacken</source><translation>Extract</translation></message>
+    <message><source>Hier entpacken</source><translation>Extract here</translation></message>
+    <message><source>Entpacken nach...</source><translation>Extract to...</translation></message>
     <message><source>Bearbeiten</source><translation>Edit</translation></message>
     <message><source>Umbenennen</source><translation>Rename</translation></message>
     <message><source>Aktualisieren</source><translation>Refresh</translation></message>
@@ -278,6 +282,14 @@
     <message><source>Wiederherstellen fehlgeschlagen: Metadaten fehlen für '{name}'.</source><translation>Restore failed: metadata missing for '{name}'.</translation></message>
     <message><source>Wiederherstellen fehlgeschlagen für '{name}': {error}</source><translation>Restore failed for '{name}': {error}</translation></message>
     <message><source>{count} Element(e) wiederhergestellt</source><translation>{count} item(s) restored</translation></message>
+    <message><source>Archiv</source><translation>Archive</translation></message>
+    <message><source>Archiv speichern unter</source><translation>Save archive as</translation></message>
+    <message><source>Archiv erstellen fehlgeschlagen</source><translation>Archive creation failed</translation></message>
+    <message><source>Archiv erstellt: {name}</source><translation>Archive created: {name}</translation></message>
+    <message><source>Entpacken fehlgeschlagen</source><translation>Extraction failed</translation></message>
+    <message><source>Archiv entpackt: {name}</source><translation>Archive extracted: {name}</translation></message>
+    <message><source>Archiv entpackt: {count} Elemente</source><translation>Archive extracted: {count} items</translation></message>
+    <message><source>Zielordner zum Entpacken wählen</source><translation>Select target folder for extraction</translation></message>
   </context>
 
   <context>
@@ -348,6 +360,14 @@
     <message><source>Papierkorb-Funktion ist nicht verfügbar (send2trash fehlt).</source><translation>Trash function is not available (send2trash missing).</translation></message>
     <message><source>Neuer Name darf nicht leer sein</source><translation>New name must not be empty</translation></message>
     <message><source>new_name darf keinen Pfad enthalten</source><translation>new_name must not contain a path</translation></message>
+    <message><source>Keine Dateien zum Archivieren ausgewählt</source><translation>No files selected for archiving</translation></message>
+    <message><source>Archivformat zum Erstellen wird nicht unterstützt: {path}</source><translation>Archive format for creation is not supported: {path}</translation></message>
+    <message><source>Archiv nicht gefunden: {path}</source><translation>Archive not found: {path}</translation></message>
+    <message><source>Entpacken ist nur für Dateien möglich: {path}</source><translation>Extraction is only possible for files: {path}</translation></message>
+    <message><source>Archivformat wird nicht unterstützt: {path}</source><translation>Archive format is not supported: {path}</translation></message>
+    <message><source>Archiv enthält einen ungültigen Pfad: {path}</source><translation>Archive contains an invalid path: {path}</translation></message>
+    <message><source>Archiv enthält unsichere Verknüpfungen: {path}</source><translation>Archive contains unsafe links: {path}</translation></message>
+    <message><source>Konnte Zieldatei nicht bestimmen: {path}</source><translation>Could not determine target file: {path}</translation></message>
   </context>
 
   <context>
