@@ -20,6 +20,7 @@ class GroupWorkspaceWidget(QWidget):
         self._split_mode = "single"
         self._active_slot = "primary"
         self._is_active_group = False
+        self._dispose_prepared = False
         self._editor_settings = editor_settings
         self._panes = {}
 
@@ -42,16 +43,36 @@ class GroupWorkspaceWidget(QWidget):
         pane.widget.setParent(None)
         pane.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        pane.currentPathChanged.connect(lambda path, source=pane: self._on_pane_path_changed(source, path))
-        pane.navigationStateChanged.connect(
-            lambda can_back, can_up, source=pane: self._on_pane_navigation_changed(source, can_back, can_up)
-        )
-        pane.filesystemMutationCommitted.connect(lambda source=pane: self._on_pane_filesystem_mutation(source))
+        pane.currentPathChanged.connect(self._on_any_pane_path_changed)
+        pane.navigationStateChanged.connect(self._on_any_pane_navigation_changed)
+        pane.filesystemMutationCommitted.connect(self._on_any_pane_filesystem_mutation)
         pane.groupRequested.connect(self.groupRequested.emit)
 
         if clone_from_primary and "primary" in self._panes:
             pane.import_state(self._panes["primary"].export_state())
         return pane
+
+    def _sender_pane(self):
+        source = self.sender()
+        return source if isinstance(source, PaneController) else None
+
+    def _on_any_pane_path_changed(self, path):
+        source = self._sender_pane()
+        if source is None:
+            return
+        self._on_pane_path_changed(source, path)
+
+    def _on_any_pane_navigation_changed(self, can_back, can_up):
+        source = self._sender_pane()
+        if source is None:
+            return
+        self._on_pane_navigation_changed(source, can_back, can_up)
+
+    def _on_any_pane_filesystem_mutation(self):
+        source = self._sender_pane()
+        if source is None:
+            return
+        self._on_pane_filesystem_mutation(source)
 
     def _on_pane_path_changed(self, source, path):
         self._update_active_slot_from_focus()
@@ -246,6 +267,9 @@ class GroupWorkspaceWidget(QWidget):
         return pane
 
     def prepare_for_dispose(self):
+        if self._dispose_prepared:
+            return
+        self._dispose_prepared = True
         for pane in self._panes.values():
             if pane is None:
                 continue

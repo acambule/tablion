@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
         self.plain_tabbing_mode = True
         self._persisted_once = False
         self._restored_splitter_sizes = False
+        self._shutdown_prepared = False
 
         self.ui = loader.load(str(ui_path))
         if self.ui is None:
@@ -1036,12 +1037,37 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         debug_log("MainWindow.closeEvent received")
+        self.prepare_for_shutdown()
         self.persist_app_state()
         super().closeEvent(event)
 
     def quit_application(self):
+        self.prepare_for_shutdown()
         self.persist_app_state()
         QApplication.instance().quit()
+
+    def prepare_for_shutdown(self):
+        if self._shutdown_prepared:
+            return
+        self._shutdown_prepared = True
+
+        if self._settings_dialog is not None:
+            try:
+                self._settings_dialog.close()
+            except RuntimeError:
+                pass
+            self._settings_dialog = None
+
+        if self.group_controller is None:
+            return
+
+        for pane in list(self.group_controller.group_panes_by_page.values()):
+            if pane is None or not hasattr(pane, "prepare_for_dispose"):
+                continue
+            try:
+                pane.prepare_for_dispose()
+            except RuntimeError:
+                continue
 
     def show_about_info(self):
         try:

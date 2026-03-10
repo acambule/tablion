@@ -96,6 +96,10 @@ class PaneController(QObject):
     _INTERNAL_DRAG_MIME_TYPE = "application/x-tablion-internal-paths"
 
     def prepare_for_dispose(self):
+        if getattr(self, "_dispose_prepared", False):
+            return
+        self._dispose_prepared = True
+
         if self._selection_rubber_band is not None:
             try:
                 self._selection_rubber_band.hide()
@@ -132,6 +136,17 @@ class PaneController(QObject):
             QApplication.clipboard().dataChanged.disconnect(self.on_clipboard_data_changed)
         except (TypeError, RuntimeError):
             pass
+        if self.model is not None:
+            try:
+                self.model.fileRenamed.disconnect(self.on_model_file_renamed)
+            except (TypeError, RuntimeError):
+                pass
+            if getattr(self, "_directory_loaded_handler", None) is not None:
+                try:
+                    self.model.directoryLoaded.disconnect(self._directory_loaded_handler)
+                except (TypeError, RuntimeError):
+                    pass
+                self._directory_loaded_handler = None
 
     def __init__(self, file_system_model, parent=None, editor_settings=None):
         super().__init__(parent)
@@ -175,6 +190,8 @@ class PaneController(QObject):
         self._selection_rubber_band = None
         self._selection_rubber_origin = None
         self._selection_rubber_viewport = None
+        self._dispose_prepared = False
+        self._directory_loaded_handler = None
         configured_columns = getattr(self._editor_settings, "visible_file_tree_columns", [0, 1, 2, 3])
         self._visible_tree_columns = self._normalize_visible_tree_columns(configured_columns)
 
@@ -277,38 +294,58 @@ class PaneController(QObject):
         if delegate is not None:
             delegate.closeEditor.connect(self.on_delegate_close_editor)
 
-        def on_loaded(path):
-            try:
-                if self.tree_view is None:
-                    return
+        self._directory_loaded_handler = self._on_model_directory_loaded
+        self.model.directoryLoaded.connect(self._directory_loaded_handler)
+        QTimer.singleShot(300, self.optimize_columns)
 
-                if not self._pending_root_path:
-                    if QDir.cleanPath(path) == QDir.cleanPath(self.current_directory):
-                        self.apply_current_sort()
-                        self.optimize_columns()
-                    return
-
-                requested = QDir.cleanPath(self._pending_root_path)
-                loaded = QDir.cleanPath(path)
-                if loaded != requested:
-                    return
-
-                root_index = self.model.index(self._pending_root_path)
-                if root_index.isValid():
-                    self.tree_view.setRootIndex(root_index)
-                    self.tree_view.expand(root_index)
-                    if self.icon_view is not None:
-                        self.icon_view.setRootIndex(root_index)
-
-                self.apply_pending_restore_state()
-                self._pending_root_path = None
-                self.apply_current_sort()
-                self.optimize_columns()
-            except RuntimeError:
+    def _on_model_directory_loaded(self, path):
+        try:
+            if self._dispose_prepared or self.tree_view is None:
                 return
 
-        self.model.directoryLoaded.connect(on_loaded)
-        QTimer.singleShot(300, self.optimize_columns)
+            if not self._pending_root_path:
+                if QDir.cleanPath(path) == QDir.cleanPath(self.current_directory):
+                    self.apply_current_sort()
+                    self.optimize_columns()
+                return
+
+            requested = QDir.cleanPath(self._pending_root_path)
+            loaded = QDir.cleanPath(path)
+            if loaded != requested:
+                return
+
+            root_index = self.model.index(self._pending_root_path)
+            if root_index.isValid():
+                self.tree_view.setRootIndex(root_index)
+                self.tree_view.expand(root_index)
+                if self.icon_view is not None:
+                    self.icon_view.setRootIndex(root_index)
+
+            self.apply_pending_restore_state()
+            self._pending_root_path = None
+            self.apply_current_sort()
+            self.optimize_columns()
+        except RuntimeError:
+            return
+
+    def _edit_index_if_alive(self, view, index):
+        if self._dispose_prepared or view is None:
+            return
+        try:
+            view.edit(index)
+        except RuntimeError:
+            return
+
+    def _restore_active_view_focus_if_alive(self):
+        if self._dispose_prepared:
+            return
+        active_view = self.active_item_view()
+        if active_view is None:
+            return
+        try:
+            active_view.setFocus(Qt.FocusReason.OtherFocusReason)
+        except RuntimeError:
+            return
 
     def setup_icon_view(self):
         self.icon_view = QListView(self.widget)
@@ -1709,10 +1746,12 @@ class PaneController(QObject):
             active_view = self.active_item_view()
             if adapter is not None:
                 adapter.select_single_index(new_index, focus=True)
-            QTimer.singleShot(0, lambda idx=new_index, view=active_view: view.edit(idx) if view is not None else None)
+            QTimer.singleShot(0, lambda idx=new_index, view=active_view: self._edit_index_if_alive(view, idx))
             return candidate
 
         def select_later():
+            if self._dispose_prepared:
+                return
             later_index = self.model.index(str(candidate))
             if later_index.isValid():
                 adapter = self.active_view_adapter()
@@ -1720,7 +1759,7 @@ class PaneController(QObject):
                 if adapter is not None:
                     adapter.select_single_index(later_index, focus=True)
                 if active_view is not None:
-                    active_view.edit(later_index)
+                    self._edit_index_if_alive(active_view, later_index)
             else:
                 self._pending_created_item_path = None
 
@@ -1757,10 +1796,12 @@ class PaneController(QObject):
             active_view = self.active_item_view()
             if adapter is not None:
                 adapter.select_single_index(new_index, focus=True)
-            QTimer.singleShot(0, lambda idx=new_index, view=active_view: view.edit(idx) if view is not None else None)
+            QTimer.singleShot(0, lambda idx=new_index, view=active_view: self._edit_index_if_alive(view, idx))
             return candidate
 
         def select_later():
+            if self._dispose_prepared:
+                return
             later_index = self.model.index(str(candidate))
             if later_index.isValid():
                 adapter = self.active_view_adapter()
@@ -1768,7 +1809,7 @@ class PaneController(QObject):
                 if adapter is not None:
                     adapter.select_single_index(later_index, focus=True)
                 if active_view is not None:
-                    active_view.edit(later_index)
+                    self._edit_index_if_alive(active_view, later_index)
             else:
                 self._pending_created_item_path = None
 
@@ -1847,7 +1888,7 @@ class PaneController(QObject):
                 except (FileNotFoundError, OSError, ValueError):
                     pass
 
-        QTimer.singleShot(0, lambda: self.active_item_view().setFocus(Qt.FocusReason.OtherFocusReason) if self.active_item_view() is not None else None)
+        QTimer.singleShot(0, self._restore_active_view_focus_if_alive)
 
     def resolve_drop_context(self, mime_data, pos, source_widget=None, source_view=None):
         source_paths = self.extract_paths_from_mime(mime_data)
@@ -2246,6 +2287,8 @@ class PaneController(QObject):
         QTimer.singleShot(0, self.optimize_columns)
 
     def apply_pending_restore_state(self):
+        if self._dispose_prepared:
+            return
         if self._pending_restore_selection:
             first_path = self._pending_restore_selection[0]
             index = self.model.index(first_path)
@@ -2437,7 +2480,7 @@ class PaneController(QObject):
         self.apply_view_mode("details")
 
     def optimize_columns(self):
-        if self.tree_view is None:
+        if self._dispose_prepared or self.tree_view is None:
             return
 
         if self.filetree_view_mode == "icons":
@@ -2458,7 +2501,7 @@ class PaneController(QObject):
             return
 
     def apply_current_sort(self):
-        if self.tree_view is None:
+        if self._dispose_prepared or self.tree_view is None:
             return
 
         try:
@@ -2477,7 +2520,7 @@ class PaneController(QObject):
             return
 
     def force_resort(self):
-        if self.tree_view is None:
+        if self._dispose_prepared or self.tree_view is None:
             return
 
         try:
@@ -2510,6 +2553,8 @@ class PaneController(QObject):
             focused_widget.clearFocus()
 
     def refresh_current_directory(self, preserve_focus=False, force_rescan=False):
+        if self._dispose_prepared:
+            return
         focused_widget = QApplication.focusWidget()
         active_view = self.active_item_view()
         should_restore_focus = bool(
@@ -2530,12 +2575,7 @@ class PaneController(QObject):
         QTimer.singleShot(150, self.apply_current_sort)
         QTimer.singleShot(200, self.force_resort)
         if should_restore_focus:
-            QTimer.singleShot(
-                0,
-                lambda: self.active_item_view().setFocus(Qt.FocusReason.OtherFocusReason)
-                if self.active_item_view() is not None
-                else None,
-            )
+            QTimer.singleShot(0, self._restore_active_view_focus_if_alive)
 
     def get_active_tab_state(self):
         if self.active_tab_index < 0 or self.active_tab_index >= len(self.tab_states):
