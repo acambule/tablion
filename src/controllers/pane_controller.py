@@ -662,17 +662,29 @@ class PaneController(QObject):
         if self.tab_states[index].pinned:
             return
 
-        removing_active = index == self.active_tab_index
-        self.tab_states.pop(index)
-        self.tab_bar.removeTab(index)
+        if self.active_tab_index >= 0 and self.active_tab_index < len(self.tab_states):
+            self.capture_tab_state(self.active_tab_index)
 
-        if removing_active:
-            new_index = min(index, len(self.tab_states) - 1)
-            self.active_tab_index = new_index
-            self.tab_bar.setCurrentIndex(new_index)
-            self.apply_tab_state(self.tab_states[new_index], push_history=False)
-        elif index < self.active_tab_index:
-            self.active_tab_index -= 1
+        removing_active = index == self.active_tab_index
+        self.tab_bar.blockSignals(True)
+        self._restoring_tab_switch = True
+        try:
+            self.tab_states.pop(index)
+            self.tab_bar.removeTab(index)
+
+            if removing_active:
+                new_index = min(index, len(self.tab_states) - 1)
+                self.active_tab_index = new_index
+                self.tab_bar.setCurrentIndex(new_index)
+            elif index < self.active_tab_index:
+                self.active_tab_index -= 1
+                self.tab_bar.setCurrentIndex(self.active_tab_index)
+        finally:
+            self._restoring_tab_switch = False
+            self.tab_bar.blockSignals(False)
+
+        if removing_active and 0 <= self.active_tab_index < len(self.tab_states):
+            self.apply_tab_state(self.tab_states[self.active_tab_index], push_history=False)
 
     def on_tab_changed(self, new_index):
         if new_index < 0 or new_index >= len(self.tab_states):
