@@ -15,6 +15,7 @@ class EditorSettings:
         self._group_creation_behavior = "default_tab"
         self._middle_click_new_tab_behavior = "background"
         self._visible_file_tree_columns = [0, 1, 2, 3]
+        self._show_hidden_files = False
         self.load()
 
     @property
@@ -54,6 +55,10 @@ class EditorSettings:
     @property
     def visible_file_tree_columns(self) -> list[int]:
         return list(self._visible_file_tree_columns)
+
+    @property
+    def show_hidden_files(self) -> bool:
+        return self._show_hidden_files
 
     def _normalize_visible_file_tree_columns(self, value) -> list[int]:
         if not isinstance(value, list):
@@ -102,6 +107,7 @@ class EditorSettings:
         self._visible_file_tree_columns = self._normalize_visible_file_tree_columns(
             payload.get("visible_file_tree_columns", [0, 1, 2, 3])
         )
+        self._show_hidden_files = bool(payload.get("show_hidden_files", False))
 
     def save(self) -> None:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +120,7 @@ class EditorSettings:
             "group_creation_behavior": self._group_creation_behavior,
             "middle_click_new_tab_behavior": self._middle_click_new_tab_behavior,
             "visible_file_tree_columns": list(self._visible_file_tree_columns),
+            "show_hidden_files": self._show_hidden_files,
         }
         self.storage_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -177,4 +184,11 @@ class EditorSettings:
         if normalized == self._visible_file_tree_columns:
             return
         self._visible_file_tree_columns = normalized
+        self.save()
+
+    def update_show_hidden_files(self, value: bool) -> None:
+        normalized = bool(value)
+        if normalized == self._show_hidden_files:
+            return
+        self._show_hidden_files = normalized
         self.save()

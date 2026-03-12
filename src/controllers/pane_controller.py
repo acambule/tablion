@@ -101,6 +101,7 @@ class PaneController(QObject):
         ("TAR.BZ2 (*.tar.bz2)", ".tar.bz2"),
         ("TAR (*.tar)", ".tar"),
     )
+    _BASE_FILE_FILTER = QDir.Filter.AllEntries | QDir.Filter.NoDotAndDotDot
 
     def prepare_for_dispose(self):
         if getattr(self, "_dispose_prepared", False):
@@ -171,6 +172,7 @@ class PaneController(QObject):
         self.view_mode_actions = {}
         self.view_mode_icons = {}
         self._action_reset_view = None
+        self._action_show_hidden_files = None
         self._editor_settings = editor_settings
         self.tab_states: list[TabState] = []
         self.active_tab_index = -1
@@ -218,11 +220,13 @@ class PaneController(QObject):
         self._default_icon_size = self.tree_view.iconSize()
         self._default_indentation = self.tree_view.indentation()
         self.icon_zoom_percent = 100
+        self._show_hidden_files = bool(getattr(self._editor_settings, "show_hidden_files", False))
 
         self.setup_tree_view()
         self.setup_path_bar()
         self.setup_view_mode_button()
         self.setup_tab_bar()
+        self.set_show_hidden_files(self._show_hidden_files, persist=False, refresh=False)
 
         self.add_tab("Tab 1", QDir.homePath())
 
@@ -488,6 +492,7 @@ class PaneController(QObject):
 
         menu = QMenu(self.btn_view_mode)
         self.btn_view_mode.setMenu(menu)
+        menu.aboutToShow.connect(self.sync_hidden_files_action_state)
 
         action_group = QActionGroup(self.btn_view_mode)
         action_group.setExclusive(True)
@@ -518,6 +523,13 @@ class PaneController(QObject):
         action_group.addAction(icons_action)
 
         menu.addSeparator()
+        action_show_hidden = menu.addAction(app_tr("PaneController", "Versteckte Dateien anzeigen"))
+        action_show_hidden.setCheckable(True)
+        action_show_hidden.setShortcut(QKeySequence("Ctrl+H"))
+        action_show_hidden.setShortcutVisibleInContextMenu(True)
+        action_show_hidden.setChecked(self._show_hidden_files)
+        self._action_show_hidden_files = action_show_hidden
+
         reset_icon = QIcon.fromTheme("view-refresh")
         if reset_icon.isNull():
             reset_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
@@ -536,6 +548,7 @@ class PaneController(QObject):
         }
 
         action_group.triggered.connect(lambda action: self.apply_view_mode(str(action.data())))
+        action_show_hidden.triggered.connect(lambda checked: self.set_show_hidden_files(bool(checked)))
         action_reset_view.triggered.connect(self.reset_view_to_default)
 
     def _apply_tree_header_translations(self):
@@ -634,6 +647,8 @@ class PaneController(QObject):
         icons_action = self.view_mode_actions.get("icons")
         if icons_action is not None:
             icons_action.setText(app_tr("PaneController", "Icons"))
+        if self._action_show_hidden_files is not None:
+            self._action_show_hidden_files.setText(app_tr("PaneController", "Versteckte Dateien anzeigen"))
         if self._action_reset_view is not None:
             self._action_reset_view.setText(app_tr("PaneController", "Standard"))
 
@@ -879,6 +894,9 @@ class PaneController(QObject):
                 if event.key() == Qt.Key.Key_F5:
                     self.refresh_current_directory(force_rescan=True)
                     return True
+                if event.key() == Qt.Key.Key_H and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                    self.toggle_show_hidden_files()
+                    return True
                 if event.key() == Qt.Key.Key_F2:
                     if self.selected_count() <= 1:
                         self.rename_current_item()
@@ -931,6 +949,9 @@ class PaneController(QObject):
                     return True
                 if event.key() == Qt.Key.Key_F5:
                     self.refresh_current_directory(force_rescan=True)
+                    return True
+                if event.key() == Qt.Key.Key_H and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                    self.toggle_show_hidden_files()
                     return True
                 if event.key() == Qt.Key.Key_F2:
                     if self.selected_count() <= 1:
@@ -1186,6 +1207,37 @@ class PaneController(QObject):
             if selected_filter == filter_label:
                 return suffix
         return ".zip"
+
+    def show_hidden_files(self) -> bool:
+        if self.model is None:
+            return self._show_hidden_files
+        return bool(self.model.filter() & QDir.Filter.Hidden)
+
+    def sync_hidden_files_action_state(self):
+        current_value = self.show_hidden_files()
+        self._show_hidden_files = current_value
+        if self._action_show_hidden_files is not None:
+            self._action_show_hidden_files.setChecked(current_value)
+
+    def set_show_hidden_files(self, value: bool, persist: bool = True, refresh: bool = True):
+        normalized = bool(value)
+        self._show_hidden_files = normalized
+
+        current_filter = self.model.filter() if self.model is not None else self._BASE_FILE_FILTER
+        next_filter = current_filter | QDir.Filter.Hidden if normalized else current_filter & ~QDir.Filter.Hidden
+        next_filter |= self._BASE_FILE_FILTER
+        if self.model is not None and next_filter != current_filter:
+            self.model.setFilter(next_filter)
+
+        if self._action_show_hidden_files is not None:
+            self._action_show_hidden_files.setChecked(normalized)
+        if persist and self._editor_settings is not None:
+            self._editor_settings.update_show_hidden_files(normalized)
+        if refresh:
+            self.refresh_current_directory(preserve_focus=True, force_rescan=True)
+
+    def toggle_show_hidden_files(self):
+        self.set_show_hidden_files(not self.show_hidden_files())
 
     def _is_application_target(self, path: str) -> bool:
         path_obj = Path(path)

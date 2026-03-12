@@ -7,6 +7,7 @@ from pathlib import Path
 
 from debug_log import debug_log
 from PySide6.QtCore import QDir, QMimeData, Qt, QUrl
+from PySide6.QtGui import QBrush, QGuiApplication, QPalette
 from PySide6.QtWidgets import QFileSystemModel
 from localization import app_tr
 
@@ -25,6 +26,15 @@ class FileSystemModel(QFileSystemModel):
             if section in translated_headers:
                 return translated_headers[section]
         return super().headerData(section, orientation, role)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.ForegroundRole and index.isValid():
+            file_info = self.fileInfo(index)
+            if file_info.exists() and file_info.isHidden():
+                palette = QGuiApplication.palette()
+                hidden_color = palette.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText)
+                return QBrush(hidden_color)
+        return super().data(index, role)
 
     def mimeTypes(self):
         inherited = [

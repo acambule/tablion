@@ -244,6 +244,7 @@
     <message><source>Details</source><translation>Details</translation></message>
     <message><source>Liste</source><translation>Liste</translation></message>
     <message><source>Icons</source><translation>Icons</translation></message>
+    <message><source>Versteckte Dateien anzeigen</source><translation>Versteckte Dateien anzeigen</translation></message>
     <message><source>Standard</source><translation>Standard</translation></message>
     <message><source>Tab</source><translation>Tab</translation></message>
     <message><source>Neuer Tab</source><translation>Neuer Tab</translation></message>

@@ -236,6 +236,7 @@
     <message><source>Details</source><translation>Details</translation></message>
     <message><source>Liste</source><translation>List</translation></message>
     <message><source>Icons</source><translation>Icons</translation></message>
+    <message><source>Versteckte Dateien anzeigen</source><translation>Show hidden files</translation></message>
     <message><source>Standard</source><translation>Default</translation></message>
     <message><source>Tab</source><translation>Tab</translation></message>
     <message><source>Neuer Tab</source><translation>New Tab</translation></message>
