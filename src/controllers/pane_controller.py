@@ -15,6 +15,8 @@ from debug_log import debug_log
 from controllers.view_adapters import IconViewAdapter, TreeViewAdapter
 from models.file_operations import FileOperations
 from widgets.path_bar import PathBar
+from widgets.properties_dialog import PropertiesDialog
+from utils.open_with import applications_for_path, launch_with_application
 
 
 @dataclass
@@ -1183,6 +1185,15 @@ class PaneController(QObject):
             return None
         return archive_path
 
+    def _single_selected_existing_path(self) -> str | None:
+        paths = self.selected_paths()
+        if len(paths) != 1:
+            return None
+        clean_path = QDir.cleanPath(str(paths[0]))
+        if not clean_path or not Path(clean_path).exists():
+            return None
+        return clean_path
+
     def _archive_creation_sources(self) -> list[str]:
         paths = self.selected_paths()
         if len(paths) < 2:
@@ -1238,6 +1249,31 @@ class PaneController(QObject):
 
     def toggle_show_hidden_files(self):
         self.set_show_hidden_files(not self.show_hidden_files())
+
+    def open_selected_with_application(self, application) -> None:
+        target_path = self._single_selected_existing_path()
+        if target_path is None:
+            return
+        if launch_with_application(application, target_path):
+            return
+        QMessageBox.warning(
+            self.widget,
+            app_tr("PaneController", "Öffnen mit fehlgeschlagen"),
+            app_tr("PaneController", "Die Anwendung konnte nicht gestartet werden."),
+        )
+
+    def show_selected_properties(self):
+        target_path = self._single_selected_existing_path()
+        if target_path is None:
+            return
+        dialog = PropertiesDialog(self.widget, target_path)
+        dialog.propertiesChanged.connect(self._on_properties_dialog_path_changed)
+        dialog.exec()
+
+    def _on_properties_dialog_path_changed(self, new_path: str):
+        self._pending_restore_selection = [QDir.cleanPath(new_path)]
+        self.refresh_current_directory(preserve_focus=True, force_rescan=True)
+        self.filesystemMutationCommitted.emit()
 
     def _is_application_target(self, path: str) -> bool:
         path_obj = Path(path)
@@ -2230,6 +2266,17 @@ class PaneController(QObject):
                 return
             return
 
+        single_selected_path = self._single_selected_existing_path()
+        open_with_actions = {}
+        if single_selected_path is not None:
+            applications = applications_for_path(single_selected_path)
+            if applications:
+                open_with_menu = menu.addMenu(app_tr("PaneController", "Öffnen mit..."))
+                for application in applications:
+                    action = open_with_menu.addAction(application.icon(), application.display_name)
+                    open_with_actions[action] = application
+                menu.addSeparator()
+
         new_folder_icon = QIcon.fromTheme("folder-new")
         if new_folder_icon.isNull():
             new_folder_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder)
@@ -2329,12 +2376,11 @@ class PaneController(QObject):
 
         menu.addSeparator()
 
-        refresh_icon = QIcon.fromTheme("view-refresh")
-        if refresh_icon.isNull():
-            refresh_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
-        action_refresh = menu.addAction(refresh_icon, app_tr("PaneController", "Aktualisieren"))
-        action_refresh.setShortcut(QKeySequence(Qt.Key.Key_F5))
-        action_refresh.setShortcutVisibleInContextMenu(True)
+        properties_icon = QIcon.fromTheme("document-properties")
+        if properties_icon.isNull():
+            properties_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogInfoView)
+        action_properties = menu.addAction(properties_icon, app_tr("PaneController", "Eigenschaften"))
+        action_properties.setEnabled(single_selected_path is not None)
 
         current_index = self.current_or_selected_index()
         action_rename.setEnabled(current_index.isValid() and self.selected_count() <= 1)
@@ -2343,8 +2389,11 @@ class PaneController(QObject):
         action_paste.setEnabled(bool(clipboard_paths) and QDir(destination_dir).exists())
 
         chosen = menu.exec(source_view.viewport().mapToGlobal(pos))
-        if chosen == action_refresh:
-            self.refresh_current_directory(force_rescan=True)
+        if chosen in open_with_actions:
+            self.open_selected_with_application(open_with_actions[chosen])
+            return
+        if chosen == action_properties:
+            self.show_selected_properties()
             return
         if chosen == action_new_folder:
             self.create_folder(destination_dir)

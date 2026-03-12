@@ -258,6 +258,7 @@
     <message><source>Wiederherstellen</source><translation>Wiederherstellen</translation></message>
     <message><source>Neuer Ordner</source><translation>Neuer Ordner</translation></message>
     <message><source>Neue Datei</source><translation>Neue Datei</translation></message>
+    <message><source>Öffnen mit...</source><translation>Öffnen mit...</translation></message>
     <message><source>Duplizieren</source><translation>Duplizieren</translation></message>
     <message><source>Kopieren</source><translation>Kopieren</translation></message>
     <message><source>Ausschneiden</source><translation>Ausschneiden</translation></message>
@@ -268,6 +269,7 @@
     <message><source>Entpacken nach...</source><translation>Entpacken nach...</translation></message>
     <message><source>Bearbeiten</source><translation>Bearbeiten</translation></message>
     <message><source>Umbenennen</source><translation>Umbenennen</translation></message>
+    <message><source>Eigenschaften</source><translation>Eigenschaften</translation></message>
     <message><source>Aktualisieren</source><translation>Aktualisieren</translation></message>
     <message><source>Ordner erstellt</source><translation>Ordner erstellt</translation></message>
     <message><source>Neue Datei.txt</source><translation>Neue Datei.txt</translation></message>
@@ -295,10 +297,74 @@
     <message><source>Archiv speichern unter</source><translation>Archiv speichern unter</translation></message>
     <message><source>Archiv erstellen fehlgeschlagen</source><translation>Archiv erstellen fehlgeschlagen</translation></message>
     <message><source>Archiv erstellt: {name}</source><translation>Archiv erstellt: {name}</translation></message>
+    <message><source>Öffnen mit fehlgeschlagen</source><translation>Öffnen mit fehlgeschlagen</translation></message>
+    <message><source>Die Anwendung konnte nicht gestartet werden.</source><translation>Die Anwendung konnte nicht gestartet werden.</translation></message>
     <message><source>Entpacken fehlgeschlagen</source><translation>Entpacken fehlgeschlagen</translation></message>
     <message><source>Archiv entpackt: {name}</source><translation>Archiv entpackt: {name}</translation></message>
     <message><source>Archiv entpackt: {count} Elemente</source><translation>Archiv entpackt: {count} Elemente</translation></message>
     <message><source>Zielordner zum Entpacken wählen</source><translation>Zielordner zum Entpacken wählen</translation></message>
+  </context>
+
+  <context>
+    <name>PropertiesDialog</name>
+    <message><source>Eigenschaften</source><translation>Eigenschaften</translation></message>
+    <message><source>Allgemein</source><translation>Allgemein</translation></message>
+    <message><source>Berechtigungen</source><translation>Berechtigungen</translation></message>
+    <message><source>Schließen</source><translation>Schließen</translation></message>
+    <message><source>OK</source><translation>OK</translation></message>
+    <message><source>Abbrechen</source><translation>Abbrechen</translation></message>
+    <message><source>Anwenden</source><translation>Anwenden</translation></message>
+    <message><source>Ordner</source><translation>Ordner</translation></message>
+    <message><source>Datei</source><translation>Datei</translation></message>
+    <message><source>Nicht verfügbar</source><translation>Nicht verfügbar</translation></message>
+    <message><source>{count} Einträge</source><translation>{count} Einträge</translation></message>
+    <message><source>Name</source><translation>Name</translation></message>
+    <message><source>Typ</source><translation>Typ</translation></message>
+    <message><source>Pfad</source><translation>Pfad</translation></message>
+    <message><source>Ort</source><translation>Ort</translation></message>
+    <message><source>Öffnen mit</source><translation>Öffnen mit</translation></message>
+    <message><source>Ändern</source><translation>Ändern</translation></message>
+    <message><source>Größe</source><translation>Größe</translation></message>
+    <message><source>Erstellt</source><translation>Erstellt</translation></message>
+    <message><source>Geändert</source><translation>Geändert</translation></message>
+    <message><source>Letzter Zugriff</source><translation>Letzter Zugriff</translation></message>
+    <message><source>Versteckt</source><translation>Versteckt</translation></message>
+    <message><source>Eigentümer</source><translation>Eigentümer</translation></message>
+    <message><source>Lesbar</source><translation>Lesbar</translation></message>
+    <message><source>Schreibbar</source><translation>Schreibbar</translation></message>
+    <message><source>Sonstige</source><translation>Sonstige</translation></message>
+    <message><source>Ausführbar</source><translation>Ausführbar</translation></message>
+    <message><source>Ausführen</source><translation>Ausführen</translation></message>
+    <message><source>Erweiterte Berechtigungen</source><translation>Erweiterte Berechtigungen</translation></message>
+    <message><source>Zugriffsberechtigungen</source><translation>Zugriffsberechtigungen</translation></message>
+    <message><source>Besitzer</source><translation>Besitzer</translation></message>
+    <message><source>Benutzer</source><translation>Benutzer</translation></message>
+    <message><source>Keine</source><translation>Keine</translation></message>
+    <message><source>Kein Zugriff</source><translation>Kein Zugriff</translation></message>
+    <message><source>Nur ausführen</source><translation>Nur ausführen</translation></message>
+    <message><source>Nur schreiben</source><translation>Nur schreiben</translation></message>
+    <message><source>Schreiben &amp; ausführen</source><translation>Schreiben &amp; ausführen</translation></message>
+    <message><source>Nur lesen</source><translation>Nur lesen</translation></message>
+    <message><source>Lesen &amp; ausführen</source><translation>Lesen &amp; ausführen</translation></message>
+    <message><source>Lesen &amp; schreiben</source><translation>Lesen &amp; schreiben</translation></message>
+    <message><source>Vollzugriff</source><translation>Vollzugriff</translation></message>
+    <message><source>Berechtigungen konnten nicht gesetzt werden: {error}</source><translation>Berechtigungen konnten nicht gesetzt werden: {error}</translation></message>
+    <message><source>Der Name darf nicht leer sein.</source><translation>Der Name darf nicht leer sein.</translation></message>
+    <message><source>Der Name darf keinen Pfad enthalten.</source><translation>Der Name darf keinen Pfad enthalten.</translation></message>
+    <message><source>Ziel existiert bereits: {path}</source><translation>Ziel existiert bereits: {path}</translation></message>
+    <message><source>Umbenennen fehlgeschlagen: {error}</source><translation>Umbenennen fehlgeschlagen: {error}</translation></message>
+    <message><source>Keine Anwendungen für diesen Dateityp gefunden.</source><translation>Keine Anwendungen für diesen Dateityp gefunden.</translation></message>
+    <message><source>Standardanwendung konnte nicht gesetzt werden.</source><translation>Standardanwendung konnte nicht gesetzt werden.</translation></message>
+    <message><source>Nicht festgelegt</source><translation>Nicht festgelegt</translation></message>
+    <message><source>Lesen</source><translation>Lesen</translation></message>
+    <message><source>Kein Lesen</source><translation>Kein Lesen</translation></message>
+    <message><source>Schreiben</source><translation>Schreiben</translation></message>
+    <message><source>Kein Schreiben</source><translation>Kein Schreiben</translation></message>
+    <message><source>Kein Ausführen</source><translation>Kein Ausführen</translation></message>
+    <message><source>Benutzer: {name}</source><translation>Benutzer: {name}</translation></message>
+    <message><source>Gruppe: {name}</source><translation>Gruppe: {name}</translation></message>
+    <message><source>Ja</source><translation>Ja</translation></message>
+    <message><source>Nein</source><translation>Nein</translation></message>
   </context>
 
   <context>

@@ -250,6 +250,7 @@
     <message><source>Wiederherstellen</source><translation>Restore</translation></message>
     <message><source>Neuer Ordner</source><translation>New folder</translation></message>
     <message><source>Neue Datei</source><translation>New file</translation></message>
+    <message><source>Öffnen mit...</source><translation>Open with...</translation></message>
     <message><source>Duplizieren</source><translation>Duplicate</translation></message>
     <message><source>Kopieren</source><translation>Copy</translation></message>
     <message><source>Ausschneiden</source><translation>Cut</translation></message>
@@ -260,6 +261,7 @@
     <message><source>Entpacken nach...</source><translation>Extract to...</translation></message>
     <message><source>Bearbeiten</source><translation>Edit</translation></message>
     <message><source>Umbenennen</source><translation>Rename</translation></message>
+    <message><source>Eigenschaften</source><translation>Properties</translation></message>
     <message><source>Aktualisieren</source><translation>Refresh</translation></message>
     <message><source>Ordner erstellt</source><translation>Folder created</translation></message>
     <message><source>Neue Datei.txt</source><translation>New File.txt</translation></message>
@@ -287,10 +289,74 @@
     <message><source>Archiv speichern unter</source><translation>Save archive as</translation></message>
     <message><source>Archiv erstellen fehlgeschlagen</source><translation>Archive creation failed</translation></message>
     <message><source>Archiv erstellt: {name}</source><translation>Archive created: {name}</translation></message>
+    <message><source>Öffnen mit fehlgeschlagen</source><translation>Open with failed</translation></message>
+    <message><source>Die Anwendung konnte nicht gestartet werden.</source><translation>The application could not be started.</translation></message>
     <message><source>Entpacken fehlgeschlagen</source><translation>Extraction failed</translation></message>
     <message><source>Archiv entpackt: {name}</source><translation>Archive extracted: {name}</translation></message>
     <message><source>Archiv entpackt: {count} Elemente</source><translation>Archive extracted: {count} items</translation></message>
     <message><source>Zielordner zum Entpacken wählen</source><translation>Select target folder for extraction</translation></message>
+  </context>
+
+  <context>
+    <name>PropertiesDialog</name>
+    <message><source>Eigenschaften</source><translation>Properties</translation></message>
+    <message><source>Allgemein</source><translation>General</translation></message>
+    <message><source>Berechtigungen</source><translation>Permissions</translation></message>
+    <message><source>Schließen</source><translation>Close</translation></message>
+    <message><source>OK</source><translation>OK</translation></message>
+    <message><source>Abbrechen</source><translation>Cancel</translation></message>
+    <message><source>Anwenden</source><translation>Apply</translation></message>
+    <message><source>Ordner</source><translation>Folder</translation></message>
+    <message><source>Datei</source><translation>File</translation></message>
+    <message><source>Nicht verfügbar</source><translation>Not available</translation></message>
+    <message><source>{count} Einträge</source><translation>{count} entries</translation></message>
+    <message><source>Name</source><translation>Name</translation></message>
+    <message><source>Typ</source><translation>Type</translation></message>
+    <message><source>Pfad</source><translation>Path</translation></message>
+    <message><source>Ort</source><translation>Location</translation></message>
+    <message><source>Öffnen mit</source><translation>Open with</translation></message>
+    <message><source>Ändern</source><translation>Change</translation></message>
+    <message><source>Größe</source><translation>Size</translation></message>
+    <message><source>Erstellt</source><translation>Created</translation></message>
+    <message><source>Geändert</source><translation>Modified</translation></message>
+    <message><source>Letzter Zugriff</source><translation>Last accessed</translation></message>
+    <message><source>Versteckt</source><translation>Hidden</translation></message>
+    <message><source>Eigentümer</source><translation>Owner</translation></message>
+    <message><source>Lesbar</source><translation>Readable</translation></message>
+    <message><source>Schreibbar</source><translation>Writable</translation></message>
+    <message><source>Sonstige</source><translation>Others</translation></message>
+    <message><source>Ausführbar</source><translation>Executable</translation></message>
+    <message><source>Ausführen</source><translation>Execute</translation></message>
+    <message><source>Erweiterte Berechtigungen</source><translation>Advanced permissions</translation></message>
+    <message><source>Zugriffsberechtigungen</source><translation>Access permissions</translation></message>
+    <message><source>Besitzer</source><translation>Ownership</translation></message>
+    <message><source>Benutzer</source><translation>User</translation></message>
+    <message><source>Keine</source><translation>None</translation></message>
+    <message><source>Kein Zugriff</source><translation>No access</translation></message>
+    <message><source>Nur ausführen</source><translation>Execute only</translation></message>
+    <message><source>Nur schreiben</source><translation>Write only</translation></message>
+    <message><source>Schreiben &amp; ausführen</source><translation>Write &amp; execute</translation></message>
+    <message><source>Nur lesen</source><translation>Read only</translation></message>
+    <message><source>Lesen &amp; ausführen</source><translation>Read &amp; execute</translation></message>
+    <message><source>Lesen &amp; schreiben</source><translation>Read &amp; write</translation></message>
+    <message><source>Vollzugriff</source><translation>Full access</translation></message>
+    <message><source>Berechtigungen konnten nicht gesetzt werden: {error}</source><translation>Permissions could not be changed: {error}</translation></message>
+    <message><source>Der Name darf nicht leer sein.</source><translation>The name must not be empty.</translation></message>
+    <message><source>Der Name darf keinen Pfad enthalten.</source><translation>The name must not contain a path.</translation></message>
+    <message><source>Ziel existiert bereits: {path}</source><translation>Target already exists: {path}</translation></message>
+    <message><source>Umbenennen fehlgeschlagen: {error}</source><translation>Rename failed: {error}</translation></message>
+    <message><source>Keine Anwendungen für diesen Dateityp gefunden.</source><translation>No applications found for this file type.</translation></message>
+    <message><source>Standardanwendung konnte nicht gesetzt werden.</source><translation>Could not set the default application.</translation></message>
+    <message><source>Nicht festgelegt</source><translation>Not set</translation></message>
+    <message><source>Lesen</source><translation>Read</translation></message>
+    <message><source>Kein Lesen</source><translation>No read</translation></message>
+    <message><source>Schreiben</source><translation>Write</translation></message>
+    <message><source>Kein Schreiben</source><translation>No write</translation></message>
+    <message><source>Kein Ausführen</source><translation>No execute</translation></message>
+    <message><source>Benutzer: {name}</source><translation>User: {name}</translation></message>
+    <message><source>Gruppe: {name}</source><translation>Group: {name}</translation></message>
+    <message><source>Ja</source><translation>Yes</translation></message>
+    <message><source>Nein</source><translation>No</translation></message>
   </context>
 
   <context>
