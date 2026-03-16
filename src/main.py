@@ -759,6 +759,7 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched, event):
         try:
             if watched == self.ui and event.type() == QEvent.Type.Close:
+                self.prepare_for_shutdown()
                 self.persist_app_state()
 
             if self.group_tabs and watched == self.group_tabs:
