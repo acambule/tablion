@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import shutil
-from datetime import datetime
 from pathlib import Path
 
 from debug_log import debug_log
@@ -62,41 +59,6 @@ class FileSystemModel(QFileSystemModel):
             paths.append(path)
         return paths
 
-    def _build_drag_batch_dir(self, source_paths: list[str]) -> Path:
-        downloads_dir = Path.home() / "Downloads" / ".tablion-dnd"
-        downloads_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        joined = "\n".join(source_paths)
-        digest = hashlib.sha1(joined.encode("utf-8")).hexdigest()[:12]
-        batch_dir = downloads_dir / f"{timestamp}-{digest}"
-        batch_dir.mkdir(parents=True, exist_ok=True)
-        return batch_dir
-
-    def _next_free_target(self, target: Path) -> Path:
-        if not target.exists():
-            return target
-        stem = target.stem
-        suffix = target.suffix
-        counter = 2
-        while True:
-            candidate = target.with_name(f"{stem} {counter}{suffix}")
-            if not candidate.exists():
-                return candidate
-            counter += 1
-
-    def _stage_path_for_external_drag(self, source_path: str, batch_dir: Path) -> str:
-        source = Path(source_path)
-        target = self._next_free_target(batch_dir / source.name)
-
-        if source.is_dir():
-            if target.exists():
-                shutil.rmtree(target)
-            shutil.copytree(source, target)
-        else:
-            shutil.copy2(source, target)
-
-        return QDir.cleanPath(str(target))
-
     def mimeData(self, indexes):
         mime_data = super().mimeData(indexes)
         if mime_data is None:
@@ -112,18 +74,7 @@ class FileSystemModel(QFileSystemModel):
 
         mime_data.setData(self.INTERNAL_PATHS_MIME, "\n".join(source_paths).encode("utf-8"))
 
-        batch_dir = self._build_drag_batch_dir(source_paths)
-        export_paths = []
-        for path in source_paths:
-            try:
-                staged_path = self._stage_path_for_external_drag(path, batch_dir)
-                export_paths.append(staged_path)
-                debug_log(f"DND mimeData: staged '{path}' -> '{staged_path}'")
-            except OSError as error:
-                export_paths.append(path)
-                debug_log(f"DND mimeData: staging failed for '{path}', fallback to original ({error})")
-
-        urls = [QUrl.fromLocalFile(path) for path in export_paths]
+        urls = [QUrl.fromLocalFile(path) for path in source_paths]
         if urls:
             mime_data.setUrls(urls)
             uri_values = [bytes(url.toEncoded()).decode("utf-8") for url in urls]
@@ -132,7 +83,7 @@ class FileSystemModel(QFileSystemModel):
             mime_data.setData("text/uri-list", uri_list_payload)
 
         debug_log(
-            f"DND mimeData: export_paths={export_paths[:5]} formats={mime_data.formats()}"
+            f"DND mimeData: export_paths={source_paths[:5]} formats={mime_data.formats()}"
         )
 
         return mime_data

@@ -1051,6 +1051,33 @@ class MainWindow(QMainWindow):
             return
         self._shutdown_prepared = True
 
+        try:
+            self.ui.removeEventFilter(self)
+        except RuntimeError:
+            pass
+
+        if self.group_tabs is not None:
+            try:
+                self.group_tabs.removeEventFilter(self)
+            except RuntimeError:
+                pass
+            try:
+                self.group_tabs.tabBar().removeEventFilter(self)
+            except RuntimeError:
+                pass
+            try:
+                self.group_tabs.currentChanged.disconnect(self.on_group_tab_changed)
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                self.group_tabs.tabCloseRequested.disconnect(self.on_group_tab_close_requested)
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                self.group_tabs.tabBar().tabBarDoubleClicked.disconnect(self.on_group_tab_bar_double_clicked)
+            except (TypeError, RuntimeError):
+                pass
+
         if self._settings_dialog is not None:
             try:
                 self._settings_dialog.close()

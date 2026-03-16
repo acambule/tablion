@@ -49,7 +49,11 @@ class GroupWorkspaceWidget(QWidget):
         pane.groupRequested.connect(self.groupRequested.emit)
 
         if clone_from_primary and "primary" in self._panes:
-            pane.import_state(self._panes["primary"].export_state())
+            primary = self._panes["primary"]
+            if hasattr(primary, "export_active_tab_state"):
+                pane.import_state(primary.export_active_tab_state())
+            else:
+                pane.import_state(primary.export_state())
         return pane
 
     def _sender_pane(self):
@@ -197,7 +201,7 @@ class GroupWorkspaceWidget(QWidget):
                 widget.setVisible(False)
             else:
                 widget.setParent(None)
-                widget.deleteLater()
+                shiboken6.delete(widget)
 
     def _render(self):
         self._clear_layout()
@@ -270,6 +274,12 @@ class GroupWorkspaceWidget(QWidget):
         if self._dispose_prepared:
             return
         self._dispose_prepared = True
+
+        if self._split_mode != "single":
+            self._split_mode = "single"
+            self._active_slot = "primary"
+            self._render()
+
         for pane in self._panes.values():
             if pane is None:
                 continue

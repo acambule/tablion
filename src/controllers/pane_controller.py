@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote
 
-from PySide6.QtCore import QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex, QProcess
+from PySide6.QtCore import QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex, QProcess, QThread
 from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QDesktopServices, QIcon, QDrag, QKeySequence, QPen
 from PySide6.QtUiTools import QUiLoader
-from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QFileDialog, QHBoxLayout, QListView, QMenu, QMessageBox, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QWidget, QRubberBand
+from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QFileDialog, QHBoxLayout, QListView, QMenu, QMessageBox, QProgressDialog, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QWidget, QRubberBand
 
 from localization import app_tr, ask_yes_no
 from debug_log import debug_log
@@ -29,6 +29,57 @@ class TabState:
     history: list[str] = field(default_factory=list)
     scroll_value: int = 0
     selected_paths: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class FileOperationTask:
+    source_path: str
+    target_path: str
+    name: str
+
+
+class FileOperationWorker(QObject):
+    progressChanged = Signal(int, int, str)
+    finished = Signal(dict)
+
+    def __init__(self, file_operations, operation, tasks, parent=None):
+        super().__init__(parent)
+        self._file_operations = file_operations
+        self._operation = operation
+        self._tasks = list(tasks)
+
+    def run(self):
+        total = len(self._tasks)
+        completed = 0
+        errors = []
+
+        for index, task in enumerate(self._tasks, start=1):
+            if self._operation == "move":
+                label = app_tr("PaneController", "Verschiebe: {name}").format(name=task.name)
+            else:
+                label = app_tr("PaneController", "Kopiere: {name}").format(name=task.name)
+            self.progressChanged.emit(index - 1, total, label)
+
+            try:
+                if self._operation == "move":
+                    self._file_operations.move(task.source_path, task.target_path, overwrite=False)
+                else:
+                    self._file_operations.copy(task.source_path, task.target_path, overwrite=False)
+                completed += 1
+            except (FileExistsError, FileNotFoundError, OSError, ValueError) as error:
+                errors.append(str(error))
+
+            self.progressChanged.emit(index, total, label)
+
+        self.finished.emit(
+            {
+                "operation": self._operation,
+                "requested_count": total,
+                "completed_count": completed,
+                "error_count": len(errors),
+                "errors": errors,
+            }
+        )
 
 
 class DropTargetHighlightDelegate(QStyledItemDelegate):
@@ -109,6 +160,14 @@ class PaneController(QObject):
         if getattr(self, "_dispose_prepared", False):
             return
         self._dispose_prepared = True
+
+        if self._file_operation_progress_dialog is not None:
+            try:
+                self._file_operation_progress_dialog.close()
+            except RuntimeError:
+                pass
+        self._stop_file_operation_thread(wait_forever=True)
+        self._cleanup_file_operation_state()
 
         if self._selection_rubber_band is not None:
             try:
@@ -201,6 +260,10 @@ class PaneController(QObject):
         self._selection_rubber_band = None
         self._selection_rubber_origin = None
         self._selection_rubber_viewport = None
+        self._file_operation_thread = None
+        self._file_operation_worker = None
+        self._file_operation_progress_dialog = None
+        self._pending_file_operation = None
         self._dispose_prepared = False
         self._directory_loaded_handler = None
         configured_columns = getattr(self._editor_settings, "visible_file_tree_columns", [0, 1, 2, 3])
@@ -1553,40 +1616,170 @@ class PaneController(QObject):
             return QDir.cleanPath(self.current_directory)
         return adapter.resolve_drop_target_directory(pos, self.current_directory)
 
-    def copy_paths_to_directory(self, source_paths, target_directory):
-        if not source_paths:
-            return
-
+    def _build_file_operation_tasks(self, source_paths, target_directory, operation):
+        tasks = []
         target_dir = QDir.cleanPath(target_directory)
         if not QDir(target_dir).exists():
-            return
+            return tasks
 
-        changes_applied = False
         for source in source_paths:
             source_clean = QDir.cleanPath(source)
-            if not Path(source_clean).exists():
+            source_path = Path(source_clean)
+            if not source_path.exists():
                 continue
 
-            source_path = Path(source_clean)
             target_path = Path(target_dir) / source_path.name
-
-            if QDir.cleanPath(str(target_path)) == source_clean:
+            if operation == "copy" and QDir.cleanPath(str(target_path)) == source_clean:
                 target_path = self.build_next_duplicate_path(source_path, Path(target_dir))
+
+            if operation == "move" and QDir.cleanPath(str(target_path)) == source_clean:
+                continue
             if target_path.exists():
                 continue
 
-            try:
-                self.file_operations.copy(source_path, target_path, overwrite=False)
-                changes_applied = True
-            except (FileExistsError, FileNotFoundError, OSError, ValueError):
-                continue
-
-        self.optimize_columns()
-        if changes_applied:
-            self.filesystemMutationCommitted.emit()
-            self.show_operation_feedback(
-                app_tr("PaneController", "{count} Element(e) kopiert").format(count=len(source_paths))
+            tasks.append(
+                FileOperationTask(
+                    source_path=str(source_path),
+                    target_path=str(target_path),
+                    name=source_path.name,
+                )
             )
+
+        return tasks
+
+    def _cleanup_file_operation_state(self):
+        if self._file_operation_progress_dialog is not None:
+            try:
+                self._file_operation_progress_dialog.close()
+            except RuntimeError:
+                pass
+            self._file_operation_progress_dialog.deleteLater()
+            self._file_operation_progress_dialog = None
+
+        if self._file_operation_thread is not None and not self._file_operation_thread.isRunning():
+            self._file_operation_thread.deleteLater()
+            self._file_operation_thread = None
+
+        self._file_operation_worker = None
+        self._pending_file_operation = None
+
+    def _stop_file_operation_thread(self, wait_forever=False):
+        thread = self._file_operation_thread
+        if thread is None:
+            return
+
+        try:
+            thread.quit()
+            if wait_forever:
+                thread.wait()
+            else:
+                thread.wait(3000)
+        except RuntimeError:
+            return
+
+    def _on_file_operation_progress(self, value, maximum, label):
+        dialog = self._file_operation_progress_dialog
+        if dialog is None:
+            return
+        dialog.setMaximum(maximum)
+        dialog.setValue(value)
+        dialog.setLabelText(label)
+
+    def _on_file_operation_finished(self, result):
+        metadata = self._pending_file_operation or {}
+        dialog = self._file_operation_progress_dialog
+        if dialog is not None:
+            dialog.setValue(dialog.maximum())
+
+        completed_count = int(result.get("completed_count", 0) or 0)
+        error_messages = list(result.get("errors", []) or [])
+        operation = result.get("operation", metadata.get("operation", "copy"))
+
+        self._cleanup_file_operation_state()
+
+        if completed_count > 0:
+            self.refresh_current_directory(preserve_focus=True)
+            self.optimize_columns()
+            self.filesystemMutationCommitted.emit()
+
+            if metadata.get("clear_clipboard_on_success"):
+                clipboard = QApplication.clipboard()
+                clipboard.clear(mode=clipboard.Mode.Clipboard)
+                self.clear_cut_state()
+
+            if operation == "move":
+                self.show_operation_feedback(
+                    app_tr("PaneController", "{count} Element(e) verschoben").format(count=completed_count)
+                )
+            else:
+                self.show_operation_feedback(
+                    app_tr("PaneController", "{count} Element(e) kopiert").format(count=completed_count)
+                )
+
+        if error_messages:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Dateioperation unvollständig"),
+                error_messages[0],
+            )
+
+    def _start_file_operation(self, source_paths, target_directory, operation, clear_clipboard_on_success=False):
+        if self._file_operation_thread is not None:
+            self.show_operation_feedback(app_tr("PaneController", "Dateioperation bereits aktiv"))
+            return False
+
+        tasks = self._build_file_operation_tasks(source_paths, target_directory, operation)
+        if not tasks:
+            return False
+
+        destination_name = Path(QDir.cleanPath(target_directory)).name or QDir.cleanPath(target_directory)
+        dialog_title = (
+            app_tr("PaneController", "Elemente verschieben")
+            if operation == "move"
+            else app_tr("PaneController", "Elemente kopieren")
+        )
+        label_text = (
+            app_tr("PaneController", "Verschiebe {count} Element(e) nach {target}...").format(
+                count=len(tasks),
+                target=destination_name,
+            )
+            if operation == "move"
+            else app_tr("PaneController", "Kopiere {count} Element(e) nach {target}...").format(
+                count=len(tasks),
+                target=destination_name,
+            )
+        )
+
+        self._pending_file_operation = {
+            "operation": operation,
+            "clear_clipboard_on_success": clear_clipboard_on_success,
+        }
+
+        self._file_operation_progress_dialog = QProgressDialog(self.widget)
+        self._file_operation_progress_dialog.setWindowTitle(dialog_title)
+        self._file_operation_progress_dialog.setLabelText(label_text)
+        self._file_operation_progress_dialog.setRange(0, len(tasks))
+        self._file_operation_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self._file_operation_progress_dialog.setMinimumDuration(0)
+        self._file_operation_progress_dialog.setAutoClose(False)
+        self._file_operation_progress_dialog.setAutoReset(False)
+        self._file_operation_progress_dialog.setCancelButton(None)
+        self._file_operation_progress_dialog.setValue(0)
+        self._file_operation_progress_dialog.show()
+
+        self._file_operation_thread = QThread(self)
+        self._file_operation_worker = FileOperationWorker(self.file_operations, operation, tasks)
+        self._file_operation_worker.moveToThread(self._file_operation_thread)
+        self._file_operation_thread.started.connect(self._file_operation_worker.run)
+        self._file_operation_worker.progressChanged.connect(self._on_file_operation_progress)
+        self._file_operation_worker.finished.connect(self._on_file_operation_finished)
+        self._file_operation_worker.finished.connect(self._file_operation_thread.quit)
+        self._file_operation_thread.finished.connect(self._file_operation_worker.deleteLater)
+        self._file_operation_thread.start()
+        return True
+
+    def copy_paths_to_directory(self, source_paths, target_directory):
+        return self._start_file_operation(source_paths, target_directory, "copy")
 
     def build_next_duplicate_path(self, source_path, target_dir):
         source_name = source_path.name
@@ -1638,40 +1831,7 @@ class PaneController(QObject):
         return changes_applied
 
     def move_paths_to_directory(self, source_paths, target_directory):
-        if not source_paths:
-            return False
-
-        target_dir = QDir.cleanPath(target_directory)
-        if not QDir(target_dir).exists():
-            return False
-
-        changes_applied = False
-        for source in source_paths:
-            source_clean = QDir.cleanPath(source)
-            if not Path(source_clean).exists():
-                continue
-
-            source_path = Path(source_clean)
-            target_path = Path(target_dir) / source_path.name
-
-            if QDir.cleanPath(str(target_path)) == source_clean:
-                continue
-            if target_path.exists():
-                continue
-
-            try:
-                self.file_operations.move(source_path, target_path, overwrite=False)
-                changes_applied = True
-            except (FileExistsError, FileNotFoundError, OSError, ValueError):
-                continue
-
-        if changes_applied:
-            self.refresh_current_directory(preserve_focus=True)
-            self.filesystemMutationCommitted.emit()
-            self.show_operation_feedback(
-                app_tr("PaneController", "{count} Element(e) verschoben").format(count=len(source_paths))
-            )
-        return changes_applied
+        return self._start_file_operation(source_paths, target_directory, "move")
 
     def link_paths_to_directory(self, source_paths, target_directory):
         if not source_paths:
@@ -1929,10 +2089,12 @@ class PaneController(QObject):
         destination = target_directory or self.resolve_drop_target_directory()
         operation = self.extract_operation_from_mime(mime_data)
         if operation == "cut":
-            moved = self.move_paths_to_directory(source_paths, destination)
-            if moved:
-                clipboard.clear(mode=clipboard.Mode.Clipboard)
-                self.clear_cut_state()
+            self._start_file_operation(
+                source_paths,
+                destination,
+                "move",
+                clear_clipboard_on_success=True,
+            )
             return
 
         self.copy_paths_to_directory(source_paths, destination)
@@ -2226,8 +2388,7 @@ class PaneController(QObject):
         if drop_action == Qt.DropAction.MoveAction:
             return self.move_paths_to_directory(source_paths, target_dir)
 
-        self.copy_paths_to_directory(source_paths, target_dir)
-        return True
+        return self.copy_paths_to_directory(source_paths, target_dir)
 
     def on_tree_context_menu(self, pos):
         source_view = self.sender() if isinstance(self.sender(), QAbstractItemView) else self.active_item_view()
@@ -2862,6 +3023,28 @@ class PaneController(QObject):
                     "selected_paths": list(state.selected_paths),
                 }
                 for state in self.tab_states
+            ],
+        }
+
+    def export_active_tab_state(self):
+        self.capture_tab_state(self.active_tab_index)
+        active_state = self.get_active_tab_state()
+        if active_state is None:
+            return None
+
+        return {
+            "active_tab_index": 0,
+            "tabs": [
+                {
+                    "title": active_state.title,
+                    "path": active_state.path,
+                    "pinned": active_state.pinned,
+                    "view_mode": active_state.view_mode,
+                    "icon_zoom_percent": active_state.icon_zoom_percent,
+                    "history": list(active_state.history),
+                    "scroll_value": active_state.scroll_value,
+                    "selected_paths": list(active_state.selected_paths),
+                }
             ],
         }
 

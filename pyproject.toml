@@ -3,7 +3,7 @@
 name = "tablion-file-manager"
 
 # RPM-Version (Versionsnummer der Anwendung)
-version = "0.7.5"
+version = "0.7.6"
 
 # RPM-Description (Beschreibung)
 description = " Dateimanager mit Tabgruppen, Multi-View und smarter Dateiorganisation"
