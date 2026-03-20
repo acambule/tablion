@@ -8,7 +8,7 @@ from urllib.parse import unquote
 from PySide6.QtCore import QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex, QProcess, QThread
 from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QDesktopServices, QIcon, QDrag, QKeySequence, QPen
 from PySide6.QtUiTools import QUiLoader
-from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QFileDialog, QHBoxLayout, QListView, QMenu, QMessageBox, QProgressDialog, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QWidget, QRubberBand
+from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QFileDialog, QHBoxLayout, QLineEdit, QListView, QMenu, QMessageBox, QProgressDialog, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QTreeWidget, QTreeWidgetItem, QWidget, QRubberBand
 
 from localization import app_tr, ask_yes_no
 from debug_log import debug_log
@@ -80,6 +80,32 @@ class FileOperationWorker(QObject):
                 "errors": errors,
             }
         )
+
+
+class RecursiveSearchWorker(QObject):
+    finished = Signal(list)
+
+    def __init__(self, root_path, query, parent=None):
+        super().__init__(parent)
+        self._root_path = QDir.cleanPath(str(root_path))
+        self._query = str(query or "").strip().lower()
+
+    def run(self):
+        results = []
+        if not self._root_path or not self._query or not Path(self._root_path).exists():
+            self.finished.emit(results)
+            return
+
+        for dir_path, dir_names, file_names in os.walk(self._root_path):
+            for name in dir_names:
+                if self._query in name.lower():
+                    results.append((QDir.cleanPath(str(Path(dir_path) / name)), True))
+            for name in file_names:
+                if self._query in name.lower():
+                    results.append((QDir.cleanPath(str(Path(dir_path) / name)), False))
+
+        results.sort(key=lambda item: item[0].lower())
+        self.finished.emit(results)
 
 
 class DropTargetHighlightDelegate(QStyledItemDelegate):
@@ -169,6 +195,15 @@ class PaneController(QObject):
         self._stop_file_operation_thread(wait_forever=True)
         self._cleanup_file_operation_state()
 
+        if self._search_thread is not None:
+            try:
+                self._search_thread.quit()
+                self._search_thread.wait()
+            except RuntimeError:
+                pass
+            self._search_thread = None
+            self._search_worker = None
+
         if self._selection_rubber_band is not None:
             try:
                 self._selection_rubber_band.hide()
@@ -201,6 +236,12 @@ class PaneController(QObject):
             except RuntimeError:
                 pass
 
+        if self.search_line_edit is not None:
+            try:
+                self.search_line_edit.removeEventFilter(self)
+            except RuntimeError:
+                pass
+
         try:
             QApplication.clipboard().dataChanged.disconnect(self.on_clipboard_data_changed)
         except (TypeError, RuntimeError):
@@ -229,6 +270,7 @@ class PaneController(QObject):
         self.model = file_system_model
         self.file_operations = FileOperations()
         self.path_bar = None
+        self.btn_search = None
         self.btn_view_mode = None
         self.view_mode_actions = {}
         self.view_mode_icons = {}
@@ -264,6 +306,8 @@ class PaneController(QObject):
         self._file_operation_worker = None
         self._file_operation_progress_dialog = None
         self._pending_file_operation = None
+        self._search_thread = None
+        self._search_worker = None
         self._dispose_prepared = False
         self._directory_loaded_handler = None
         configured_columns = getattr(self._editor_settings, "visible_file_tree_columns", [0, 1, 2, 3])
@@ -276,6 +320,9 @@ class PaneController(QObject):
         self.view_stack = None
         self.path_bar_container = self.widget.findChild(QWidget, "pathBarContainer")
         self.btn_view_mode = self.widget.findChild(QToolButton, "btnViewMode")
+        self.search_bar_widget = None
+        self.search_line_edit = None
+        self.search_results_view = None
 
         if not self.tab_bar_host or not self.tree_view or not self.path_bar_container:
             raise RuntimeError("Pane UI ist unvollständig (tabBar/treeView/pathBarContainer fehlt)")
@@ -291,6 +338,7 @@ class PaneController(QObject):
         self.setup_path_bar()
         self.setup_view_mode_button()
         self.setup_tab_bar()
+        self.setup_search_ui()
         self.set_show_hidden_files(self._show_hidden_files, persist=False, refresh=False)
 
         self.add_tab("Tab 1", QDir.homePath())
@@ -539,6 +587,68 @@ class PaneController(QObject):
         self.path_bar.pathOpenInNewTab.connect(lambda path: self.open_path_in_new_tab(path, activate=True))
         self.path_bar_container.layout().addWidget(self.path_bar)
 
+    def setup_search_ui(self):
+        pane_top_bar = self.widget.findChild(QWidget, "paneTopBar")
+        if pane_top_bar is not None and pane_top_bar.layout() is not None:
+            self.btn_search = QToolButton(pane_top_bar)
+            search_icon = QIcon.fromTheme("edit-find")
+            if search_icon.isNull():
+                search_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
+            self.btn_search.setIcon(search_icon)
+            self.btn_search.setIconSize(QSize(20, 20))
+            self.btn_search.setText("")
+            self.btn_search.setToolTip(app_tr("PaneController", "Suchen"))
+            self.btn_search.setAutoRaise(True)
+            self.btn_search.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            pane_top_bar.layout().insertWidget(1, self.btn_search)
+            self.btn_search.clicked.connect(self.toggle_search_bar)
+
+        root_layout = self.widget.layout()
+        if root_layout is None:
+            return
+
+        self.search_bar_widget = QWidget(self.widget)
+        self.search_bar_widget.setVisible(False)
+        search_layout = QHBoxLayout(self.search_bar_widget)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(6)
+
+        self.search_line_edit = QLineEdit(self.search_bar_widget)
+        self.search_line_edit.setPlaceholderText(app_tr("PaneController", "Dateien und Ordner rekursiv suchen"))
+        self.search_line_edit.returnPressed.connect(self.start_recursive_search)
+        self.search_line_edit.installEventFilter(self)
+
+        close_button = QToolButton(self.search_bar_widget)
+        close_button.setIcon(self.widget.style().standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton))
+        close_button.setToolTip(app_tr("PaneController", "Suche schließen"))
+        close_button.setAutoRaise(True)
+        close_button.clicked.connect(self.close_search_bar)
+
+        search_layout.addWidget(self.search_line_edit, 1)
+        search_layout.addWidget(close_button)
+        root_layout.insertWidget(2, self.search_bar_widget)
+
+        self.search_results_view = QTreeWidget(self.widget)
+        self.search_results_view.setRootIsDecorated(False)
+        self.search_results_view.setItemsExpandable(False)
+        self.search_results_view.setAlternatingRowColors(True)
+        self.search_results_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.search_results_view.setHeaderLabels(
+            [
+                app_tr("PaneController", "Name"),
+                app_tr("PaneController", "Pfad"),
+                app_tr("PaneController", "Typ"),
+            ]
+        )
+        self.search_results_view.itemActivated.connect(
+            lambda item, _column: self.on_search_result_activated(item)
+        )
+        self.search_results_view.itemDoubleClicked.connect(
+            lambda item, _column: self.on_search_result_activated(item)
+        )
+        if self.view_stack is not None:
+            self.view_stack.addWidget(self.search_results_view)
+
     def setup_view_mode_button(self):
         if not self.btn_view_mode:
             return
@@ -700,6 +810,8 @@ class PaneController(QObject):
         self.optimize_columns()
 
     def retranslate_ui_texts(self):
+        if self.btn_search is not None:
+            self.btn_search.setToolTip(app_tr("PaneController", "Suchen"))
         if self.btn_view_mode is not None:
             self.btn_view_mode.setToolTip(app_tr("PaneController", "Ansicht"))
 
@@ -719,6 +831,16 @@ class PaneController(QObject):
 
         if self.path_bar is not None and hasattr(self.path_bar, "retranslate_ui_texts"):
             self.path_bar.retranslate_ui_texts()
+        if self.search_line_edit is not None:
+            self.search_line_edit.setPlaceholderText(app_tr("PaneController", "Dateien und Ordner rekursiv suchen"))
+        if self.search_results_view is not None:
+            self.search_results_view.setHeaderLabels(
+                [
+                    app_tr("PaneController", "Name"),
+                    app_tr("PaneController", "Pfad"),
+                    app_tr("PaneController", "Typ"),
+                ]
+            )
 
         self._apply_tree_header_translations()
         self._apply_visible_tree_columns()
@@ -852,6 +974,11 @@ class PaneController(QObject):
             self.apply_tab_state(self.tab_states[current_index], push_history=False)
 
     def eventFilter(self, watched, event):
+        if watched == self.search_line_edit and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.close_search_bar()
+                return True
+
         if watched == self.tab_bar:
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self._tab_drag_index = self.tab_bar.tabAt(event.position().toPoint())
@@ -1183,14 +1310,132 @@ class PaneController(QObject):
         return super().eventFilter(watched, event)
 
     def active_item_view(self):
+        if self.view_stack is not None and self.search_results_view is not None:
+            if self.view_stack.currentWidget() is self.search_results_view:
+                return self.search_results_view
         if self.filetree_view_mode == "icons" and self.icon_view is not None:
             return self.icon_view
         return self.tree_view
 
     def active_view_adapter(self):
+        if self.view_stack is not None and self.search_results_view is not None:
+            if self.view_stack.currentWidget() is self.search_results_view:
+                return None
         if self.filetree_view_mode == "icons" and self.icon_view_adapter is not None:
             return self.icon_view_adapter
         return self.tree_view_adapter
+
+    def toggle_search_bar(self):
+        if self.search_bar_widget is None:
+            return
+        if self.search_bar_widget.isVisible():
+            self.close_search_bar()
+            return
+        self.search_bar_widget.setVisible(True)
+        if self.search_line_edit is not None:
+            self.search_line_edit.setFocus()
+            self.search_line_edit.selectAll()
+
+    def close_search_bar(self):
+        if self.search_bar_widget is not None:
+            self.search_bar_widget.setVisible(False)
+        if self.search_line_edit is not None:
+            self.search_line_edit.clear()
+        if self.search_results_view is not None:
+            self.search_results_view.clear()
+        if self.view_stack is not None and self.search_results_view is not None:
+            if self.view_stack.currentWidget() is self.search_results_view:
+                if self.filetree_view_mode == "icons" and self.icon_view is not None:
+                    self.view_stack.setCurrentWidget(self.icon_view)
+                else:
+                    self.view_stack.setCurrentWidget(self.tree_view)
+
+    def start_recursive_search(self):
+        if self.search_line_edit is None:
+            return
+
+        search_text = self.search_line_edit.text().strip()
+        if not search_text:
+            self.close_search_bar()
+            return
+
+        if self._search_thread is not None:
+            self.show_operation_feedback(app_tr("PaneController", "Suche läuft bereits"))
+            return
+
+        self.show_operation_feedback(
+            app_tr("PaneController", "Suche in {path} gestartet").format(path=self.current_directory)
+        )
+
+        self._search_thread = QThread(self)
+        self._search_worker = RecursiveSearchWorker(self.current_directory, search_text)
+        self._search_worker.moveToThread(self._search_thread)
+        self._search_thread.started.connect(self._search_worker.run)
+        self._search_worker.finished.connect(self._on_recursive_search_finished)
+        self._search_worker.finished.connect(self._search_thread.quit)
+        self._search_thread.finished.connect(self._search_worker.deleteLater)
+        self._search_thread.start()
+
+    def _on_recursive_search_finished(self, results):
+        if self.search_results_view is None:
+            return
+
+        self.search_results_view.clear()
+        for path, is_dir in results:
+            name = Path(path).name or path
+            type_label = (
+                app_tr("PaneController", "Ordner")
+                if is_dir
+                else (Path(path).suffix.lstrip(".").upper() or app_tr("PaneController", "Datei"))
+            )
+            item = QTreeWidgetItem([name, path, type_label])
+            item.setData(0, Qt.ItemDataRole.UserRole, path)
+            item.setData(0, Qt.ItemDataRole.UserRole + 1, is_dir)
+
+            model_index = self.model.index(path)
+            if model_index.isValid():
+                item.setIcon(0, self.model.fileIcon(model_index))
+
+            self.search_results_view.addTopLevelItem(item)
+
+        self.search_results_view.resizeColumnToContents(0)
+        self.search_results_view.resizeColumnToContents(2)
+        total_width = self.search_results_view.viewport().width()
+        if total_width > 0:
+            self.search_results_view.setColumnWidth(0, max(self.search_results_view.columnWidth(0), int(total_width * 0.28)))
+            self.search_results_view.setColumnWidth(1, max(self.search_results_view.columnWidth(1), int(total_width * 0.52)))
+        if self.view_stack is not None:
+            self.view_stack.setCurrentWidget(self.search_results_view)
+
+        if results:
+            self.show_operation_feedback(
+                app_tr("PaneController", "{count} Treffer gefunden").format(count=len(results))
+            )
+        else:
+            self.show_operation_feedback(app_tr("PaneController", "Keine Treffer gefunden"))
+
+        if self._search_thread is not None:
+            self._search_thread.quit()
+            self._search_thread.wait()
+            self._search_thread.deleteLater()
+            self._search_thread = None
+        self._search_worker = None
+
+    def on_search_result_activated(self, item):
+        if item is None:
+            return
+
+        path = QDir.cleanPath(str(item.data(0, Qt.ItemDataRole.UserRole) or ""))
+        is_dir = bool(item.data(0, Qt.ItemDataRole.UserRole + 1))
+        if not path or not Path(path).exists():
+            return
+
+        self.close_search_bar()
+        if is_dir:
+            self.navigate_to(path)
+            return
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     _EDITABLE_EXTENSIONS = {
         ".desktop",
@@ -2746,6 +2991,10 @@ class PaneController(QObject):
         target_path = QDir.cleanPath(path)
         if not QDir(target_path).exists():
             return
+
+        if self.view_stack is not None and self.search_results_view is not None:
+            if self.view_stack.currentWidget() is self.search_results_view:
+                self.close_search_bar()
 
         active_state = self.get_active_tab_state()
         if active_state is None:
