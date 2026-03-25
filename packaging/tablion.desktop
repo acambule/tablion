@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Tablion Dateimanager
+Comment=Dateimanager mit Tabgruppen, Multi-View und smarter Dateiorganisation
+Exec=env TABLION_DISPLAY_VERSION=0.8.0-1 tablion-file-manager %U
+Icon=system-file-manager
+Terminal=false
+Categories=Utility;FileManager;
+StartupNotify=true
+MimeType=inode/directory;
