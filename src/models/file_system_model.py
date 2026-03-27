@@ -89,4 +89,4 @@ class FileSystemModel(QFileSystemModel):
         return mime_data
 
     def supportedDragActions(self):
-        return Qt.DropAction.CopyAction
+        return Qt.DropAction.CopyAction | Qt.DropAction.MoveAction | Qt.DropAction.LinkAction
