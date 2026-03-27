@@ -411,12 +411,12 @@ class GroupWorkspaceWidget(QWidget):
         if pane and hasattr(pane, "open_path_in_new_tab"):
             pane.open_path_in_new_tab(path, activate=activate)
 
-    def refresh_current_directory(self):
+    def refresh_current_directory(self, preserve_focus=False, force_rescan=False):
         pane = self._active_pane()
         if pane is None:
             return
         if pane and hasattr(pane, "refresh_current_directory"):
-            pane.refresh_current_directory()
+            pane.refresh_current_directory(preserve_focus=preserve_focus, force_rescan=force_rescan)
 
     def export_state(self):
         return self._panes["primary"].export_state()
