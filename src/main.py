@@ -42,6 +42,7 @@ class MainWindow(QMainWindow):
         self.editor_settings = EditorSettings(self.editor_settings_path)
         initialize_debug_log(self.debug_log_path)
         debug_log("MainWindow.__init__ started")
+        debug_log(f"Debug log path: {self.debug_log_path}")
 
         self.group_tabs = None
         self.group_content_host = None
@@ -1017,7 +1018,7 @@ class MainWindow(QMainWindow):
     def refresh_active_tree_view(self):
         active_pane = self.get_active_pane()
         if active_pane and hasattr(active_pane, "refresh_current_directory"):
-            active_pane.refresh_current_directory()
+            active_pane.refresh_current_directory(force_rescan=True)
 
     def focus_active_tree_view(self):
         active_pane = self.get_active_pane()
@@ -1102,7 +1103,7 @@ class MainWindow(QMainWindow):
             # use the extracted AboutDialog if available
             from widgets.about_dialog import AboutDialog
 
-            dlg = AboutDialog(self, self.navigator_data_path, self.session_data_path)
+            dlg = AboutDialog(self, self.navigator_data_path, self.session_data_path, self.debug_log_path)
             dlg.exec_centered()
         except Exception:
             try:

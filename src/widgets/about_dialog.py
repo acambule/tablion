@@ -4,12 +4,11 @@ import shutil
 import sys
 from html import escape
 from pathlib import Path
-from urllib.parse import quote, unquote
 
 from PySide6.QtUiTools import QUiLoader
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout, QApplication, QWidget
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
 
 from localization import app_tr
 from utils.xdg_defaults import get_default_file_manager, get_desktop_display_name, ensure_user_desktop_file, set_default_file_manager
@@ -17,7 +16,7 @@ from version_info import formatted_version
 
 
 class AboutDialog(QDialog):
-    def __init__(self, parent, navigator_data_path: Path, session_data_path: Path):
+    def __init__(self, parent, navigator_data_path: Path, session_data_path: Path, debug_log_path: Path):
         super().__init__(parent)
         loader = QUiLoader()
         ui_path = Path(__file__).resolve().parent.parent / 'ui' / 'about.ui'
@@ -111,16 +110,21 @@ class AboutDialog(QDialog):
         try:
             nav_label = app_tr("AboutDialog", "Navigator-Daten:")
             session_label = app_tr("AboutDialog", "Sitzungsdaten:")
+            debug_log_label = app_tr("AboutDialog", "Debug-Log:")
             navigator_text = str(navigator_data_path)
             session_text = str(session_data_path)
-            navigator_href = f"tablion-path://{quote(navigator_text)}"
-            session_href = f"tablion-path://{quote(session_text)}"
+            debug_log_text = str(debug_log_path)
+            navigator_href = QUrl.fromLocalFile(navigator_text).toString()
+            session_href = QUrl.fromLocalFile(session_text).toString()
+            debug_log_href = QUrl.fromLocalFile(debug_log_text).toString()
             self.infoLabel.setText(
                 "<table cellspacing='0' cellpadding='2' style='width:100%;'>"
                 f"<tr><td style='font-weight:600; width: 165px;'>{escape(nav_label)}</td>"
                 f"<td><a href=\"{escape(navigator_href)}\">{escape(navigator_text)}</a></td></tr>"
                 f"<tr><td style='font-weight:600; width: 165px;'>{escape(session_label)}</td>"
                 f"<td><a href=\"{escape(session_href)}\">{escape(session_text)}</a></td></tr>"
+                f"<tr><td style='font-weight:600; width: 165px;'>{escape(debug_log_label)}</td>"
+                f"<td><a href=\"{escape(debug_log_href)}\">{escape(debug_log_text)}</a></td></tr>"
                 "</table>"
             )
             self.infoLabel.setOpenExternalLinks(False)
@@ -248,21 +252,11 @@ class AboutDialog(QDialog):
 
     def _on_path_link_activated(self, href: str):
         try:
-            prefix = "tablion-path://"
-            if not href or not href.startswith(prefix):
+            if not href:
                 return
-            target_path = unquote(href[len(prefix):]).strip()
-            if not target_path:
+            target_url = QUrl(href)
+            if not target_url.isValid():
                 return
-
-            parent = self.parent()
-            if parent is None:
-                return
-            if not hasattr(parent, "get_active_pane"):
-                return
-
-            active_pane = parent.get_active_pane()
-            if active_pane and hasattr(active_pane, "open_path_in_new_tab"):
-                active_pane.open_path_in_new_tab(target_path, activate=True)
+            QDesktopServices.openUrl(target_url)
         except Exception:
             pass
