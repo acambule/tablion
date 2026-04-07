@@ -49,5 +49,5 @@ install -D -m 644 %{SOURCE1} %{buildroot}%{_datadir}/applications/tablion.deskto
 
 
 %changelog
-* Fri Mar 20 2026 Antonio Cambule <dev@cambule.info> - 0.8.0-1
+* Fri Mar 27 2026 Antonio Cambule <dev@cambule.info> - 0.8.3-1
 - Automatisch aktualisiert

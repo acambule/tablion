@@ -20,8 +20,11 @@ except ImportError:
 
 from localization import app_tr, ask_yes_no
 from debug_log import debug_log
+from backends.local import LocalFileSystemBackend
 from controllers.view_adapters import IconViewAdapter, TreeViewAdapter
+from domain.filesystem import PaneLocation
 from models.file_operations import FileOperations
+from services.navigation import PaneNavigationService
 from utils.batch_rename import render_batch_rename_name
 from widgets.batch_rename_dialog import BatchRenameDialog
 from widgets.path_bar import PathBar
@@ -283,6 +286,8 @@ class PaneController(QObject):
 
         self.model = file_system_model
         self.file_operations = FileOperations()
+        self._local_backend = LocalFileSystemBackend()
+        self._navigation_service = PaneNavigationService(self._local_backend)
         self.path_bar = None
         self.btn_search = None
         self.btn_view_mode = None
@@ -899,13 +904,16 @@ class PaneController(QObject):
             self.tab_bar.setCurrentIndex(index)
             self.apply_tab_state(state, push_history=False)
 
+    def _resolve_local_location(self, path) -> PaneLocation | None:
+        return self._navigation_service.resolve_directory_location(str(path or ""))
+
     def open_path_in_new_tab(self, path, activate=True):
-        target_path = QDir.cleanPath(str(path or ""))
-        if not target_path or not QDir(target_path).exists():
+        location = self._resolve_local_location(path)
+        if location is None:
             return
 
-        tab_title = Path(target_path).name or target_path
-        self.add_tab(tab_title, target_path)
+        tab_title = self._navigation_service.display_name_for_location(location)
+        self.add_tab(tab_title, location.path)
         if activate:
             self.tab_bar.setCurrentIndex(len(self.tab_states) - 1)
 
@@ -3306,9 +3314,10 @@ class PaneController(QObject):
         QDesktopServices.openUrl(QUrl.fromLocalFile(clean_path))
 
     def navigate_to(self, path, push_history=True):
-        target_path = QDir.cleanPath(path)
-        if not QDir(target_path).exists():
+        location = self._resolve_local_location(path)
+        if location is None:
             return
+        target_path = location.path
 
         if self.view_stack is not None and self.search_results_view is not None:
             if self.view_stack.currentWidget() is self.search_results_view:
@@ -3319,7 +3328,7 @@ class PaneController(QObject):
             return
 
         if active_state.pinned and target_path != active_state.path:
-            tab_title = Path(target_path).name or target_path
+            tab_title = self._navigation_service.display_name_for_location(location)
             self.add_tab(tab_title, target_path)
 
             new_index = len(self.tab_states) - 1
@@ -3338,7 +3347,7 @@ class PaneController(QObject):
         active_state.path = target_path
         self.current_directory = target_path
 
-        tab_title = Path(target_path).name or target_path
+        tab_title = self._navigation_service.display_name_for_location(location)
         active_state.title = tab_title
         if self.active_tab_index >= 0:
             self.tab_bar.setTabText(self.active_tab_index, tab_title)
@@ -3368,20 +3377,23 @@ class PaneController(QObject):
         self.navigate_to(previous_path, push_history=False)
 
     def navigate_up(self):
-        current = QDir.cleanPath(self.current_directory)
-        parent = QDir.cleanPath(str(Path(current).parent))
-        if parent == current:
+        current_location = self._resolve_local_location(self.current_directory)
+        if current_location is None:
             return
-        self.navigate_to(parent)
+        parent_location = self._navigation_service.get_parent_location(current_location)
+        if parent_location is None:
+            return
+        self.navigate_to(parent_location.path)
 
     def can_go_back(self):
         active_state = self.get_active_tab_state()
         return bool(active_state and active_state.history)
 
     def can_go_up(self):
-        current = QDir.cleanPath(self.current_directory)
-        parent = QDir.cleanPath(str(Path(current).parent))
-        return parent != current
+        current_location = self._resolve_local_location(self.current_directory)
+        if current_location is None:
+            return False
+        return self._navigation_service.get_parent_location(current_location) is not None
 
     def current_path(self):
         return self.current_directory
