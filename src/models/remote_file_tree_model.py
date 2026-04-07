@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractItemModel, QModelIndex, Qt
+from PySide6.QtCore import QModelIndex, Qt
 from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel
 
 from localization import app_tr
@@ -25,6 +25,8 @@ class RemoteFileTreeModel(QStandardItemModel):
     ROLE_PATH = Qt.ItemDataRole.UserRole + 100
     ROLE_IS_DIR = Qt.ItemDataRole.UserRole + 101
     ROLE_WEB_URL = Qt.ItemDataRole.UserRole + 102
+    ROLE_CHILDREN_LOADED = Qt.ItemDataRole.UserRole + 103
+    ROLE_PLACEHOLDER = Qt.ItemDataRole.UserRole + 104
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -39,6 +41,23 @@ class RemoteFileTreeModel(QStandardItemModel):
             row_items = self._build_row(entry)
             self.appendRow(row_items)
         self.sort(0, Qt.SortOrder.AscendingOrder)
+
+    def set_children_for_index(self, parent_index: QModelIndex, entries: list[RemoteFileItem]) -> None:
+        if not parent_index.isValid():
+            return
+        parent_item = self.itemFromIndex(parent_index.siblingAtColumn(0))
+        if parent_item is None:
+            return
+        parent_item.removeRows(0, parent_item.rowCount())
+        for entry in entries:
+            parent_item.appendRow(self._build_row(entry))
+        parent_item.setData(True, self.ROLE_CHILDREN_LOADED)
+
+    def children_loaded(self, index: QModelIndex) -> bool:
+        if not index.isValid():
+            return False
+        item = self.itemFromIndex(index.siblingAtColumn(0))
+        return bool(item.data(self.ROLE_CHILDREN_LOADED)) if item is not None else False
 
     def filePath(self, index: QModelIndex) -> str:
         if not index.isValid():
@@ -73,6 +92,7 @@ class RemoteFileTreeModel(QStandardItemModel):
         name_item.setData(entry.location.path, self.ROLE_PATH)
         name_item.setData(entry.is_dir, self.ROLE_IS_DIR)
         name_item.setData(entry.web_url, self.ROLE_WEB_URL)
+        name_item.setData(False, self.ROLE_CHILDREN_LOADED)
         name_item.setEditable(False)
 
         size_item = QStandardItem(self._size_text(entry))
@@ -89,7 +109,16 @@ class RemoteFileTreeModel(QStandardItemModel):
         modified_item.setData(entry.location.path, self.ROLE_PATH)
         modified_item.setData(entry.is_dir, self.ROLE_IS_DIR)
         modified_item.setEditable(False)
+        if entry.is_dir:
+            name_item.appendRow(self._placeholder_row(entry.location))
         return [name_item, size_item, type_item, modified_item]
+
+    def _placeholder_row(self, location: PaneLocation) -> list[QStandardItem]:
+        placeholder = QStandardItem("")
+        placeholder.setData(location.path, self.ROLE_PATH)
+        placeholder.setData(True, self.ROLE_PLACEHOLDER)
+        placeholder.setEditable(False)
+        return [placeholder, QStandardItem(""), QStandardItem(""), QStandardItem("")]
 
     def _icon_for_entry(self, entry: RemoteFileItem) -> QIcon:
         if entry.is_dir:

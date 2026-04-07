@@ -126,7 +126,9 @@ class IconPickerDialog(QDialog):
         self._all_themes_check_box.toggled.connect(self._on_theme_changed)
         self._icon_size_slider.valueChanged.connect(self._on_icon_size_changed)
         self._theme_icon_list.itemClicked.connect(self._on_theme_icon_item_clicked)
+        self._theme_icon_list.itemDoubleClicked.connect(self._on_theme_icon_item_double_clicked)
         self._custom_icon_list.itemClicked.connect(self._on_custom_icon_item_clicked)
+        self._custom_icon_list.itemDoubleClicked.connect(self._on_custom_icon_item_double_clicked)
         self._browse_button.clicked.connect(self._browse_icon_file)
         self._button_box.accepted.connect(self.accept)
         self._button_box.rejected.connect(self.reject)
@@ -196,6 +198,14 @@ class IconPickerDialog(QDialog):
         icon_path = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
         if icon_path:
             self._icon_line_edit.setText(icon_path)
+
+    def _on_theme_icon_item_double_clicked(self, item: QListWidgetItem) -> None:
+        self._on_theme_icon_item_clicked(item)
+        self.accept()
+
+    def _on_custom_icon_item_double_clicked(self, item: QListWidgetItem) -> None:
+        self._on_custom_icon_item_clicked(item)
+        self.accept()
 
     def _on_theme_changed(self) -> None:
         self._populate_theme_icons()

@@ -18,6 +18,9 @@ Er soll nicht mehr selbst die Details von Navigation, Dateioperationen, Remote-Z
 - Phase 2 abgeschlossen
 - Phase 3 abgeschlossen
 - Phase 4 abgeschlossen
+- Phase 5 abgeschlossen
+- Phase 6 weitgehend abgeschlossen
+- Phase 7 begonnen
 
 ## Aktuelle Probleme
 
@@ -162,6 +165,18 @@ Ergebnis:
 - Remote-Drives sind konfigurierbar und links sichtbar
 - noch ohne vollständige Dateiansicht
 
+Stand nach Abschluss:
+- Remote-Persistenz ist in Verbindungen und Einträge getrennt
+- `Remote-Clouds` ist in den Einstellungen als eigener Bereich vorhanden
+- Verbindungen und Einträge werden getrennt verwaltet
+- OneDrive-Authentifizierung ist als erster produktiver Login-Flow vorhanden
+- Navigator-Einträge werden aus Remote-Einträgen dynamisch erzeugt
+- Remote-Einträge bleiben aus `navigator.json` heraus und werden nicht wie lokale Favoriten persistiert
+- es gibt einen Bearbeiten-Sprung vom Navigator zurück in den passenden Remote-Eintrag der Einstellungen
+- Remote-Dateizuordnungen für Browser-/PWA-Öffnen sind als eigener Einstellungs-Tab vorhanden
+- Icon-Auswahl für Remote-Einträge ist konfigurierbar, inklusive Theme-Icons und eigener Icons
+- der Einstellungsdialog merkt sich seine Größe und hat für `Remote-Clouds` konsistentere Abstände
+
 ## Phase 6: OneDrive als erster Provider
 
 Ziel:
@@ -174,6 +189,17 @@ Arbeitsschritte:
 
 Ergebnis:
 - OneDrive kann im Pane navigiert werden
+
+Stand nach aktuellem Ausbau:
+- OneDrive wird als erster echter Remote-Provider über Microsoft Graph gelesen
+- Remote-Inhalte werden im Pane in Tree- und Icon-Ansicht dargestellt
+- Remote-Ordner sind im Tree aufklappbar
+- PathBar unterstützt Remote-Kontexte einschließlich Root, Breadcrumbs, Overflow und Unterordner-Menüs
+- Doppelklick auf Remote-Dateien ist Browser-first
+- zusätzlich ist lokales Herunterladen/Öffnen weiterhin als bewusste Option vorhanden
+- Remote-Dateizuordnungen erlauben das Öffnen über definierte Browser-/PWA-Kommandos mit `{url}`
+- lokale Dateien und Ordner können per `Einfügen` sowie per Drag'n'Drop in einen Remote kopiert werden
+- Remote-Kontextmenüs und UI-Feedback sind auf die Remote-Nutzung abgestimmt
 
 ## Phase 7: Remote-Dateioperationen
 
@@ -189,6 +215,23 @@ Arbeitsschritte:
 Ergebnis:
 - Remote fühlt sich im Kern wie ein Dateimanager an
 
+Stand nach aktuellem Ausbau:
+- `rename`, `delete`, `mkdir` sind für Remote implementiert
+- `new file` ist für Remote implementiert
+- `copy local -> remote` funktioniert über `Einfügen` und Drag'n'Drop
+- `copy remote -> remote` innerhalb desselben Remote-Eintrags ist implementiert
+- `move remote -> remote` innerhalb desselben Remote-Eintrags ist implementiert
+- `duplicate` ist für Remote implementiert
+- `copy`, `cut`, `paste`, `rename`, `delete`, `new folder`, `new file`, `duplicate` sind im Remote-Kontextmenü vorhanden
+
+Noch offen in Phase 7:
+- `remote -> local` als echter Transferpfad
+- `remote -> anderer remote mount`
+- `local cut -> remote` als echtes Verschieben
+- internes Remote-Drag'n'Drop
+- robustere Konfliktstrategien und bessere Fortschrittsanzeige für Remote-Transfers
+- SharePoint-/Team-Auswahl fachlich weiter ausbauen
+
 ## Regeln für die Umsetzung
 
 - Kein OneDrive- oder Graph-Code in `PaneController`
@@ -196,6 +239,83 @@ Ergebnis:
 - Neue Logik zuerst in Service oder Backend einziehen
 - Bestehendes lokales Verhalten muss nach jeder Phase weiter funktionieren
 - Refactor in kleinen, stabilen Schritten statt Big Bang
+
+## Offene Verbesserungen nach aktuellem Stand
+
+### 1. `PaneController` weiter entschlacken
+
+Der Controller ist deutlich besser geschnitten als zu Beginn, bleibt aber noch groß.
+Vor allem diese Bereiche sind noch stark orchestrierungs- und verzweigungsintensiv:
+
+- Kontextmenüs und Shortcut-Dispatch
+- Remote-gegen-lokal-Verzweigungen
+- View-spezifische UI-Entscheidungen
+- einige Clipboard- und Drag'n'Drop-Verknüpfungen
+
+Sinnvolle nächste Schritte:
+
+- Action-Dispatch für lokal und remote weiter zusammenführen
+- Menü-/Shortcut-Dispatch aus dem Controller in kleinere UI-Helfer ziehen
+- verbleibende Remote-Sonderpfade stärker an Services binden
+
+### 2. Gemeinsame Dateiaktions-Schicht für lokal und remote vertiefen
+
+Aktuell existieren bereits viele ausgelagerte Services, aber lokal und remote laufen noch nicht überall
+über dieselben fachlichen Einstiegspunkte.
+
+Sinnvolle nächste Schritte:
+
+- gemeinsames Action-Interface für `copy`, `move`, `rename`, `delete`, `create`, `open`
+- `PaneController` entscheidet nur noch über Kontext und ruft dann dieselbe Fachaktion auf
+- Remote-Aktionen aus Controller-Helfern stärker in dedizierte Services verschieben
+
+### 3. Anzeige- und Modellschicht weiter angleichen
+
+Aktuell:
+
+- lokal basiert stark auf `QFileSystemModel`
+- remote auf `RemoteFileTreeModel`
+
+Das ist für den Produktstand okay, aber noch keine vollständig vereinheitlichte Pane-Schicht.
+
+Sinnvolle nächste Schritte:
+
+- eine stärker backend-neutrale Entry-Darstellung aufbauen
+- gemeinsame Konzepte für Sortierung, Spalten und Metadaten weiter vereinheitlichen
+- UI-Logik weniger von konkreten Modellimplementierungen abhängig machen
+
+### 4. Remote-Funktionalität fachlich vervollständigen
+
+Wichtige Ausbaupunkte:
+
+- `remote -> local`
+- `remote -> remote` über unterschiedliche Einträge/Mounts
+- SharePoint-Site-/Library-Auswahl
+- Team-/SharePoint-Drives präziser auswählen statt heuristisch
+- Fortschritt/Abbruch für längere Remote-Operationen
+
+### 5. Credentials und Token robuster speichern
+
+Aktuell ist die Persistenz funktional, aber pragmatisch.
+
+Sinnvolle nächste Schritte:
+
+- Secret Store / Keyring statt voller Token-Persistenz in JSON
+- sauberere Trennung zwischen Konfigurationsdaten und Geheimnissen
+- Re-Auth/Scope-Änderungen noch klarer im UI abbilden
+
+### 6. Dokumentation und Testpfade weiter pflegen
+
+Mit dem gewachsenen Remote-Umfang lohnt sich ein klarer Satz Regressionstests:
+
+- lokal
+- remote persönlich
+- remote Team/SharePoint
+- Copy/Cut/Paste
+- Drag'n'Drop
+- Tab-/Split-/Session-Wiederherstellung
+
+Die Architektur-Doku sollte nach weiteren Remote-Ausbaustufen jeweils mitgezogen werden, damit sie den realen Stand widerspiegelt und nicht wieder hinterherläuft.
 
 ## Definition von Erfolg für Phase 1
 

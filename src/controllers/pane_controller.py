@@ -1,10 +1,12 @@
+import json
 import os
+import shlex
 from pathlib import Path
 
 from PySide6.QtCore import QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex, QProcess, QThread
 from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QDesktopServices, QIcon, QDrag, QKeySequence, QPen
 from PySide6.QtUiTools import QUiLoader
-from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QFileDialog, QHBoxLayout, QLineEdit, QListView, QMenu, QMessageBox, QProgressDialog, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QTreeWidget, QTreeWidgetItem, QWidget, QRubberBand
+from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QFileDialog, QHBoxLayout, QInputDialog, QLineEdit, QListView, QMenu, QMessageBox, QProgressDialog, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QTreeWidget, QTreeWidgetItem, QWidget, QRubberBand
 
 try:
     from PySide6.QtDBus import QDBusConnection, QDBusMessage, QDBusPendingCallWatcher
@@ -134,6 +136,7 @@ class PaneController(QObject):
     operationFeedback = Signal(str)
     _CLIPBOARD_MIME_TYPE = "application/x-tablion-copy-paths"
     _CLIPBOARD_OPERATION_MIME_TYPE = "application/x-tablion-clipboard-operation"
+    _REMOTE_CLIPBOARD_MIME_TYPE = "application/x-tablion-remote-locations"
     _INTERNAL_DRAG_MIME_TYPE = "application/x-tablion-internal-paths"
     _ARK_DND_SERVICE_MIME = "application/x-kde-ark-dndextract-service"
     _ARK_DND_PATH_MIME = "application/x-kde-ark-dndextract-path"
@@ -267,6 +270,8 @@ class PaneController(QObject):
         self._restoring_tab_switch = False
         self._tab_drag_index = -1
         self._tab_drag_start_pos = QPoint()
+        self._tab_reorder_drag_active = False
+        self._pending_reordered_tab_apply = False
         self._pin_icon = QIcon.fromTheme("pin")
         if self._pin_icon.isNull():
             self._pin_icon = QIcon.fromTheme("emblem-favorite")
@@ -358,6 +363,11 @@ class PaneController(QObject):
             view.viewport().setAcceptDrops(enabled)
             view.setDropIndicatorShown(enabled)
 
+    def _path_bar_root_label_for_location(self, location: PaneLocation) -> str:
+        if location.is_remote and self._remote_drive_controller is not None:
+            return self._remote_drive_controller.display_name_for_location(location)
+        return ""
+
     def setup_tab_bar_host(self):
         if self.tab_bar_host.layout() is None:
             host_layout = QHBoxLayout(self.tab_bar_host)
@@ -375,6 +385,7 @@ class PaneController(QObject):
         if header is not None:
             header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             header.customContextMenuRequested.connect(self.on_tree_header_context_menu)
+        self.tree_view.expanded.connect(self.on_tree_item_expanded)
         self.tree_view.setSortingEnabled(True)
         self.tree_view.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.tree_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -616,7 +627,13 @@ class PaneController(QObject):
         self.path_bar = PathBar(self.path_bar_container)
         self.path_bar.pathActivated.connect(self.navigate_to)
         self.path_bar.pathOpenInNewTab.connect(lambda path: self.open_path_in_new_tab(path, activate=True))
+        self.path_bar.set_remote_subdirectory_provider(self._path_bar_remote_subdirectories)
         self.path_bar_container.layout().addWidget(self.path_bar)
+
+    def _path_bar_remote_subdirectories(self, location: PaneLocation):
+        if self._remote_drive_controller is None or location is None or not location.is_remote:
+            return []
+        return self._remote_drive_controller.list_subdirectory_targets(location)
 
     def setup_search_ui(self):
         pane_top_bar = self.widget.findChild(QWidget, "paneTopBar")
@@ -758,12 +775,14 @@ class PaneController(QObject):
         action_reset_view.triggered.connect(self.reset_view_to_default)
 
     def _apply_tree_header_translations(self):
-        if self.model is None:
-            return
-        # Header strings come from FileSystemModel.headerData(); emit update on language changes.
-        self.model.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, 3)
+        if self.model is not None:
+            # Header strings come from FileSystemModel.headerData(); emit update on language changes.
+            self.model.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, 3)
+        if self._remote_model is not None:
+            self._remote_model.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, 3)
 
     def _normalize_visible_tree_columns(self, columns):
+        active_model = self._active_file_model()
         normalized = []
         if isinstance(columns, list):
             for item in columns:
@@ -771,7 +790,7 @@ class PaneController(QObject):
                     index = int(item)
                 except (TypeError, ValueError):
                     continue
-                if index < 0 or index >= self.model.columnCount():
+                if active_model is None or index < 0 or index >= active_model.columnCount():
                     continue
                 if index not in normalized:
                     normalized.append(index)
@@ -786,24 +805,27 @@ class PaneController(QObject):
             self._editor_settings.update_visible_file_tree_columns(self._visible_tree_columns)
 
     def _apply_visible_tree_columns(self):
-        if self.tree_view is None or self.model is None:
+        active_model = self._active_file_model()
+        if self.tree_view is None or active_model is None:
             return
 
         if self.filetree_view_mode != "details":
             return
 
         visible = set(self._visible_tree_columns)
-        for column in range(self.model.columnCount()):
+        for column in range(active_model.columnCount()):
             self.tree_view.setColumnHidden(column, column not in visible)
 
     def _tree_column_label(self, column: int) -> str:
-        if self.model is None:
+        active_model = self._active_file_model()
+        if active_model is None:
             return str(column)
-        value = self.model.headerData(column, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
+        value = active_model.headerData(column, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
         return str(value) if value is not None else str(column)
 
     def on_tree_header_context_menu(self, pos):
-        if self.tree_view is None or self.model is None:
+        active_model = self._active_file_model()
+        if self.tree_view is None or active_model is None:
             return
 
         header = self.tree_view.header()
@@ -815,7 +837,7 @@ class PaneController(QObject):
         visible_columns = set(self._visible_tree_columns)
         visible_count = len(visible_columns)
 
-        for column in range(self.model.columnCount()):
+        for column in range(active_model.columnCount()):
             action = menu.addAction(self._tree_column_label(column))
             action.setCheckable(True)
             is_visible = column in visible_columns
@@ -838,6 +860,38 @@ class PaneController(QObject):
         self._visible_tree_columns = self._normalize_visible_tree_columns(self._visible_tree_columns)
         self._persist_visible_tree_columns()
         self._apply_visible_tree_columns()
+        self.optimize_columns()
+
+    def on_tree_item_expanded(self, index):
+        if (
+            self._dispose_prepared
+            or self.current_location is None
+            or not self.current_location.is_remote
+            or self._remote_drive_controller is None
+        ):
+            return
+        if not index.isValid() or self.tree_view is None or self.tree_view.model() is not self._remote_model:
+            return
+        if not self._remote_model.isDir(index) or self._remote_model.children_loaded(index):
+            return
+
+        child_path = self._remote_model.filePath(index)
+        if not child_path:
+            return
+
+        location = PaneLocation(
+            kind="remote",
+            path=child_path,
+            remote_id=self.current_location.remote_id,
+        )
+        try:
+            entries = self._remote_drive_controller.list_directory(location)
+        except Exception as error:
+            self.show_operation_feedback(str(error))
+            return
+
+        self._remote_model.set_children_for_index(index, entries)
+        self.apply_current_sort()
         self.optimize_columns()
 
     def retranslate_ui_texts(self):
@@ -988,6 +1042,10 @@ class PaneController(QObject):
             return
         if self._restoring_tab_switch:
             return
+        if self._tab_reorder_drag_active:
+            self.active_tab_index = new_index
+            self._pending_reordered_tab_apply = True
+            return
 
         if self.active_tab_index >= 0 and self.active_tab_index < len(self.tab_states):
             self.capture_tab_state(self.active_tab_index)
@@ -1022,7 +1080,20 @@ class PaneController(QObject):
         current_index = self.tab_bar.currentIndex()
         if 0 <= current_index < len(self.tab_states):
             self.active_tab_index = current_index
-            self.apply_tab_state(self.tab_states[current_index], push_history=False)
+            if self._tab_reorder_drag_active:
+                self._pending_reordered_tab_apply = True
+            else:
+                self.apply_tab_state(self.tab_states[current_index], push_history=False)
+
+    def _finalize_tab_reorder_if_needed(self) -> None:
+        if not self._pending_reordered_tab_apply:
+            return
+        self._pending_reordered_tab_apply = False
+        current_index = self.tab_bar.currentIndex()
+        if current_index < 0 or current_index >= len(self.tab_states):
+            return
+        self.active_tab_index = current_index
+        self.apply_tab_state(self.tab_states[current_index], push_history=False)
 
     def eventFilter(self, watched, event):
         if watched == self.search_line_edit and event.type() == QEvent.Type.KeyPress:
@@ -1034,6 +1105,8 @@ class PaneController(QObject):
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self._tab_drag_index = self.tab_bar.tabAt(event.position().toPoint())
                 self._tab_drag_start_pos = event.position().toPoint()
+                self._tab_reorder_drag_active = self._tab_drag_index != -1
+                self._pending_reordered_tab_apply = False
 
             if event.type() == QEvent.Type.MouseMove and (event.buttons() & Qt.MouseButton.LeftButton):
                 if self._tab_drag_index != -1:
@@ -1062,6 +1135,8 @@ class PaneController(QObject):
 
             if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                 self._tab_drag_index = -1
+                self._tab_reorder_drag_active = False
+                self._finalize_tab_reorder_if_needed()
 
             if event.type() == QEvent.Type.ContextMenu:
                 tab_index = self.tab_bar.tabAt(event.pos())
@@ -1582,6 +1657,135 @@ class PaneController(QObject):
             return None
         return clean_path
 
+    def _single_selected_remote_location(self) -> PaneLocation | None:
+        if self.current_location is None or not self.current_location.is_remote:
+            return None
+        paths = self.selected_paths()
+        if len(paths) != 1:
+            return None
+        clean_path = QDir.cleanPath(str(paths[0]))
+        if not clean_path or clean_path == "/":
+            return None
+        return PaneLocation(kind="remote", path=clean_path, remote_id=self.current_location.remote_id)
+
+    def _selected_remote_locations(self) -> list[PaneLocation]:
+        if self.current_location is None or not self.current_location.is_remote:
+            return []
+        locations: list[PaneLocation] = []
+        for raw_path in self.selected_paths():
+            clean_path = QDir.cleanPath(str(raw_path))
+            if not clean_path or clean_path == "/":
+                continue
+            locations.append(
+                PaneLocation(kind="remote", path=clean_path, remote_id=self.current_location.remote_id)
+            )
+        return locations
+
+    def _build_remote_clipboard_mime_data(self, locations: list[PaneLocation], *, operation: str) -> QMimeData:
+        mime_data = QMimeData()
+        payload = [
+            {
+                "kind": location.kind,
+                "path": location.path,
+                "remote_id": location.remote_id,
+            }
+            for location in locations
+            if location.is_remote and location.remote_id
+        ]
+        mime_data.setData(self._REMOTE_CLIPBOARD_MIME_TYPE, json.dumps(payload).encode("utf-8"))
+        mime_data.setData(self._CLIPBOARD_OPERATION_MIME_TYPE, operation.encode("utf-8"))
+        return mime_data
+
+    def _extract_remote_locations_from_mime(self, mime_data) -> list[PaneLocation]:
+        if mime_data is None or not mime_data.hasFormat(self._REMOTE_CLIPBOARD_MIME_TYPE):
+            return []
+        raw_payload = bytes(mime_data.data(self._REMOTE_CLIPBOARD_MIME_TYPE)).decode("utf-8", errors="ignore")
+        try:
+            parsed = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+
+        locations: list[PaneLocation] = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            path = QDir.cleanPath(str(item.get("path") or ""))
+            remote_id = str(item.get("remote_id") or "").strip()
+            kind = str(item.get("kind") or "remote").strip() or "remote"
+            if kind != "remote" or not path or not remote_id or path == "/":
+                continue
+            locations.append(PaneLocation(kind="remote", path=path, remote_id=remote_id))
+        return locations
+
+    def _download_remote_file_for_open(self, location: PaneLocation) -> str | None:
+        if self._remote_drive_controller is None:
+            return None
+        try:
+            cached_path = self._remote_drive_controller.download_file_to_cache(location)
+        except Exception as error:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Remote-Datei konnte nicht geladen werden"),
+                str(error),
+            )
+            return None
+        return str(cached_path)
+
+    def _selected_remote_file_url(self, location: PaneLocation) -> str:
+        active_view = self.active_item_view()
+        active_model = active_view.model() if active_view is not None else None
+        adapter = self.active_view_adapter()
+        index = adapter.current_or_selected_index() if adapter is not None else QModelIndex()
+        if (
+            active_model is None
+            or not index.isValid()
+            or not hasattr(active_model, "fileUrl")
+            or not hasattr(active_model, "filePath")
+        ):
+            return ""
+        model_path = QDir.cleanPath(str(active_model.filePath(index) or ""))
+        if model_path != QDir.cleanPath(location.path):
+            return ""
+        return str(active_model.fileUrl(index) or "").strip()
+
+    def _open_remote_file_via_rule(self, location: PaneLocation) -> bool:
+        if self._editor_settings is None:
+            return False
+        rule = self._editor_settings.remote_open_rule_for(location.path)
+        if not rule:
+            return False
+        remote_url = self._selected_remote_file_url(location)
+        if not remote_url:
+            return False
+
+        command = str(rule.get("command") or "").strip()
+        arguments = str(rule.get("arguments") or "").strip()
+        if not command:
+            return False
+
+        if arguments:
+            argument_text = (
+                arguments.replace("{url}", remote_url)
+                .replace("{path}", location.path)
+                .replace("{name}", Path(location.path).name)
+            )
+            args = shlex.split(argument_text)
+        else:
+            args = [remote_url]
+        try:
+            return bool(QProcess.startDetached(command, args))
+        except Exception:
+            return False
+
+    def _open_remote_file_in_browser(self, location: PaneLocation) -> bool:
+        remote_url = self._selected_remote_file_url(location)
+        if not remote_url:
+            return False
+        QDesktopServices.openUrl(QUrl(remote_url))
+        return True
+
     def _archive_creation_sources(self) -> list[str]:
         paths = [QDir.cleanPath(str(path)) for path in self.selected_paths()]
         return self._archive_service.archive_creation_sources(paths)
@@ -1669,6 +1873,23 @@ class PaneController(QObject):
         if not paths:
             return
         target = QDir.cleanPath(str(paths[0]))
+        if self.current_location is not None and self.current_location.is_remote:
+            remote_location = self._single_selected_remote_location()
+            if remote_location is None:
+                return
+            active_model = self.active_item_view().model() if self.active_item_view() is not None else None
+            index = self.active_view_adapter().current_or_selected_index() if self.active_view_adapter() is not None else QModelIndex()
+            if active_model is not None and index.isValid() and hasattr(active_model, "isDir") and active_model.isDir(index):
+                self.navigate_to(remote_location)
+                return
+            if self._open_remote_file_via_rule(remote_location):
+                return
+            if self._open_remote_file_in_browser(remote_location):
+                return
+            cached_path = self._download_remote_file_for_open(remote_location)
+            if cached_path:
+                self._open_service.open_default(cached_path)
+            return
         target_path = Path(target)
         if not target_path.exists():
             return
@@ -1685,6 +1906,22 @@ class PaneController(QObject):
         self._open_service.open_default(target)
 
     def open_selection_in_editor(self):
+        if self.current_location is not None and self.current_location.is_remote:
+            remote_location = self._single_selected_remote_location()
+            if remote_location is None:
+                return
+            if self._open_remote_file_via_rule(remote_location):
+                return
+            if not self._open_remote_file_in_browser(remote_location):
+                cached_path = self._download_remote_file_for_open(remote_location)
+                if not cached_path:
+                    return
+                editor_cmd = None
+                if self._editor_settings is not None:
+                    editor_cmd = self._editor_settings.preferred_editor()
+                self._open_service.open_in_editor(cached_path, preferred_editor=editor_cmd)
+            return
+
         paths = self.selected_paths()
         if not paths:
             return
@@ -1798,6 +2035,19 @@ class PaneController(QObject):
         )
 
     def copy_selection_to_clipboard(self):
+        if self.current_location is not None and self.current_location.is_remote:
+            locations = self._selected_remote_locations()
+            if not locations:
+                return
+            QApplication.clipboard().setMimeData(
+                self._build_remote_clipboard_mime_data(locations, operation="copy")
+            )
+            self.clear_cut_state()
+            self.show_operation_feedback(
+                app_tr("PaneController", "{count} Remote-Element(e) kopiert").format(count=len(locations))
+            )
+            return
+
         source_paths = self.selected_paths()
         if not source_paths:
             return
@@ -1815,6 +2065,20 @@ class PaneController(QObject):
         )
 
     def cut_selection_to_clipboard(self):
+        if self.current_location is not None and self.current_location.is_remote:
+            locations = self._selected_remote_locations()
+            if not locations:
+                return
+            QApplication.clipboard().setMimeData(
+                self._build_remote_clipboard_mime_data(locations, operation="cut")
+            )
+            self._cut_paths = {location.path for location in locations}
+            self.update_cut_visual_state()
+            self.show_operation_feedback(
+                app_tr("PaneController", "{count} Remote-Element(e) ausgeschnitten").format(count=len(locations))
+            )
+            return
+
         source_paths = self.selected_paths()
         if not source_paths:
             return
@@ -2032,6 +2296,30 @@ class PaneController(QObject):
         return self._start_file_operation(source_paths, target_directory, "copy")
 
     def duplicate_selection(self):
+        if self.current_location is not None and self.current_location.is_remote:
+            locations = self._selected_remote_locations()
+            if not locations or self._remote_drive_controller is None:
+                return False
+            try:
+                duplicated = self._remote_drive_controller.copy_items(locations, self.current_location)
+            except Exception as error:
+                QMessageBox.warning(
+                    self.widget,
+                    app_tr("PaneController", "Duplizieren fehlgeschlagen"),
+                    str(error),
+                )
+                return False
+
+            if duplicated:
+                self.refresh_current_directory(preserve_focus=True)
+                self.show_operation_feedback(
+                    app_tr("PaneController", "{count} Remote-Element(e) dupliziert").format(
+                        count=len(duplicated)
+                    )
+                )
+                return True
+            return False
+
         source_paths = self.selected_paths()
         if not source_paths:
             return False
@@ -2074,6 +2362,10 @@ class PaneController(QObject):
         return changes_applied
 
     def delete_selected_paths(self, permanent=None):
+        if self.current_location is not None and self.current_location.is_remote:
+            self._delete_selected_remote_paths()
+            return
+
         selected = self.selected_paths()
         if not selected:
             return
@@ -2137,6 +2429,52 @@ class PaneController(QObject):
                 delete_result.errors[0],
             )
 
+    def _delete_selected_remote_paths(self):
+        locations = self._selected_remote_locations()
+        if not locations:
+            return
+
+        item_labels = [Path(location.path).name or location.path for location in locations]
+        if len(item_labels) == 1:
+            message = app_tr("PaneController", "'{target}' remote löschen?").format(target=item_labels[0])
+        else:
+            message = app_tr("PaneController", "{count} Remote-Elemente löschen?").format(
+                count=len(item_labels)
+            )
+
+        confirmed = ask_yes_no(
+            self.widget,
+            app_tr("PaneController", "Remote löschen"),
+            message,
+            default_no=True,
+        )
+        if not confirmed:
+            return
+
+        try:
+            deleted = self._remote_drive_controller.delete_items(locations) if self._remote_drive_controller is not None else []
+        except Exception as error:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Löschen fehlgeschlagen"),
+                str(error),
+            )
+            return
+
+        if not deleted:
+            return
+
+        for view in (self.tree_view, self.icon_view):
+            if view is None:
+                continue
+            view.clearSelection()
+            view.setCurrentIndex(QModelIndex())
+
+        self.refresh_current_directory()
+        self.show_operation_feedback(
+            app_tr("PaneController", "{count} Remote-Element(e) gelöscht").format(count=len(deleted))
+        )
+
     def restore_selected_from_trash(self):
         selected = self.selected_paths()
         if not selected:
@@ -2166,11 +2504,71 @@ class PaneController(QObject):
     def paste_from_clipboard(self, target_directory=None):
         clipboard = QApplication.clipboard()
         mime_data = clipboard.mimeData()
+        remote_locations = self._extract_remote_locations_from_mime(mime_data)
         source_paths = self.extract_paths_from_mime(mime_data)
-        if not source_paths:
+        if not source_paths and not remote_locations:
             return
 
         destination = target_directory or self.resolve_drop_target_directory()
+        if self.current_location is not None and self.current_location.is_remote:
+            if remote_locations:
+                destination_path = QDir.cleanPath(str(destination or self.current_location.path))
+                destination_location = PaneLocation(
+                    kind="remote",
+                    path=destination_path,
+                    remote_id=self.current_location.remote_id,
+                )
+                operation = self.extract_operation_from_mime(mime_data)
+                try:
+                    if operation == "cut":
+                        changed = (
+                            self._remote_drive_controller.move_items(remote_locations, destination_location)
+                            if self._remote_drive_controller is not None
+                            else []
+                        )
+                        if changed:
+                            QApplication.clipboard().clear()
+                            self.clear_cut_state()
+                            self.refresh_current_directory()
+                            self.show_operation_feedback(
+                                app_tr("PaneController", "{count} Remote-Element(e) verschoben").format(
+                                    count=len(changed)
+                                )
+                            )
+                        return
+
+                    changed = (
+                        self._remote_drive_controller.copy_items(remote_locations, destination_location)
+                        if self._remote_drive_controller is not None
+                        else []
+                    )
+                except Exception as error:
+                    QMessageBox.warning(
+                        self.widget,
+                        app_tr("PaneController", "Einfügen fehlgeschlagen"),
+                        str(error),
+                    )
+                    return
+
+                if changed:
+                    self.refresh_current_directory()
+                    self.show_operation_feedback(
+                        app_tr("PaneController", "{count} Remote-Element(e) kopiert").format(count=len(changed))
+                    )
+                return
+
+            if self.extract_operation_from_mime(mime_data) == "cut":
+                self.show_operation_feedback(app_tr("PaneController", "Verschieben nach Remote ist noch nicht verfügbar"))
+                return
+            self._paste_local_paths_to_remote(source_paths, destination)
+            return
+
+        if remote_locations:
+            self.show_operation_feedback(
+                app_tr("PaneController", "Einfügen von Remote nach lokal ist noch nicht verfügbar")
+            )
+            return
+
         operation = self.extract_operation_from_mime(mime_data)
         if operation == "cut":
             self._start_file_operation(
@@ -2183,7 +2581,38 @@ class PaneController(QObject):
 
         self.copy_paths_to_directory(source_paths, destination)
 
+    def _paste_local_paths_to_remote(self, source_paths, target_directory=None):
+        if self.current_location is None or not self.current_location.is_remote or self._remote_drive_controller is None:
+            return False
+        destination_path = QDir.cleanPath(str(target_directory or self.current_location.path))
+        destination = PaneLocation(
+            kind="remote",
+            path=destination_path,
+            remote_id=self.current_location.remote_id,
+        )
+        try:
+            uploaded = self._remote_drive_controller.upload_local_paths(source_paths, destination)
+        except Exception as error:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Upload fehlgeschlagen"),
+                str(error),
+            )
+            return False
+
+        if not uploaded:
+            return False
+
+        self.refresh_current_directory()
+        self.show_operation_feedback(
+            app_tr("PaneController", "{count} Element(e) nach Remote kopiert").format(count=len(uploaded))
+        )
+        return True
+
     def create_folder(self, target_directory=None, base_name=None):
+        if self.current_location is not None and self.current_location.is_remote:
+            return self._create_remote_folder(target_directory=target_directory, base_name=base_name)
+
         destination = QDir.cleanPath(target_directory or self.resolve_drop_target_directory())
         candidate = self._creation_service.create_folder(destination, base_name)
         if candidate is None:
@@ -2219,7 +2648,34 @@ class PaneController(QObject):
         QTimer.singleShot(150, select_later)
         return candidate
 
+    def _create_remote_folder(self, target_directory=None, base_name=None):
+        if self.current_location is None or not self.current_location.is_remote or self._remote_drive_controller is None:
+            return None
+
+        destination_path = QDir.cleanPath(str(target_directory or self.resolve_drop_target_directory()))
+        destination = PaneLocation(
+            kind="remote",
+            path=destination_path,
+            remote_id=self.current_location.remote_id,
+        )
+        try:
+            created_location = self._remote_drive_controller.create_folder(destination, base_name)
+        except Exception as error:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Ordner erstellen fehlgeschlagen"),
+                str(error),
+            )
+            return None
+
+        self.refresh_current_directory()
+        self.show_operation_feedback(app_tr("PaneController", "Ordner erstellt"))
+        return created_location
+
     def create_file(self, target_directory=None, base_name=None):
+        if self.current_location is not None and self.current_location.is_remote:
+            return self._create_remote_file(target_directory=target_directory, base_name=base_name)
+
         destination = QDir.cleanPath(target_directory or self.resolve_drop_target_directory())
         candidate = self._creation_service.create_file(destination, base_name)
         if candidate is None:
@@ -2255,6 +2711,30 @@ class PaneController(QObject):
         QTimer.singleShot(150, select_later)
         return candidate
 
+    def _create_remote_file(self, target_directory=None, base_name=None):
+        if self.current_location is None or not self.current_location.is_remote or self._remote_drive_controller is None:
+            return None
+
+        destination_path = QDir.cleanPath(str(target_directory or self.resolve_drop_target_directory()))
+        destination = PaneLocation(
+            kind="remote",
+            path=destination_path,
+            remote_id=self.current_location.remote_id,
+        )
+        try:
+            created_location = self._remote_drive_controller.create_file(destination, base_name)
+        except Exception as error:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Datei erstellen fehlgeschlagen"),
+                str(error),
+            )
+            return None
+
+        self.refresh_current_directory()
+        self.show_operation_feedback(app_tr("PaneController", "Datei erstellt"))
+        return created_location
+
     def current_or_selected_index(self):
         adapter = self.active_view_adapter()
         if adapter is None:
@@ -2262,6 +2742,10 @@ class PaneController(QObject):
         return adapter.current_or_selected_index()
 
     def rename_current_item(self):
+        if self.current_location is not None and self.current_location.is_remote:
+            self._rename_current_remote_item()
+            return
+
         if self.selected_count() > 1:
             self.rename_multiple_items()
             return
@@ -2276,6 +2760,42 @@ class PaneController(QObject):
         active_view.setCurrentIndex(index)
         active_view.edit(index)
         QTimer.singleShot(0, lambda: self._select_name_without_suffix_in_editor(index))
+
+    def _rename_current_remote_item(self):
+        if self.selected_count() > 1:
+            self.show_operation_feedback(app_tr("PaneController", "Batch-Umbenennen ist für Remote noch nicht verfügbar"))
+            return
+
+        location = self._single_selected_remote_location()
+        if location is None or self._remote_drive_controller is None:
+            return
+
+        current_name = Path(location.path).name or location.path
+        new_name, accepted = QInputDialog.getText(
+            self.widget,
+            app_tr("PaneController", "Remote umbenennen"),
+            app_tr("PaneController", "Neuer Name"),
+            text=current_name,
+        )
+        if not accepted:
+            return
+
+        new_name = str(new_name or "").strip()
+        if not new_name or new_name == current_name:
+            return
+
+        try:
+            self._remote_drive_controller.rename_item(location, new_name)
+        except Exception as error:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Umbenennen fehlgeschlagen"),
+                str(error),
+            )
+            return
+
+        self.refresh_current_directory()
+        self.show_operation_feedback(app_tr("PaneController", "'{name}' umbenannt").format(name=new_name))
 
     def _select_name_without_suffix_in_editor(self, index):
         if not index.isValid():
@@ -2371,7 +2891,10 @@ class PaneController(QObject):
                     self.update_tab_visual(self.active_tab_index)
 
                 if self.path_bar:
-                    self.path_bar.set_location(active_state.location)
+                    self.path_bar.set_location(
+                        active_state.location,
+                        root_label=self._path_bar_root_label_for_location(active_state.location),
+                    )
 
                 self.currentPathChanged.emit(updated_path)
                 self.emit_navigation_state()
@@ -2417,6 +2940,11 @@ class PaneController(QObject):
             self.clear_drop_target_visual()
             return False
 
+        if self.current_location is not None and self.current_location.is_remote:
+            if ark_reference is not None:
+                return False
+            return any(Path(path).exists() for path in source_paths)
+
         return self._drop_service.can_accept_tree_drop(
             source_paths=source_paths,
             target_dir=target_dir,
@@ -2424,6 +2952,8 @@ class PaneController(QObject):
         )
 
     def resolve_drop_action(self, event, source_paths=None, target_dir=None, mime_data=None, source_widget=None):
+        if self.current_location is not None and self.current_location.is_remote:
+            return Qt.DropAction.CopyAction
         tree_viewport = self.tree_view.viewport() if self.tree_view is not None else None
         icon_viewport = self.icon_view.viewport() if self.icon_view is not None else None
         return self._drop_service.resolve_drop_action(
@@ -2535,6 +3065,13 @@ class PaneController(QObject):
         if source_paths is None or target_dir is None:
             source_paths, target_dir = self.resolve_drop_context(mime_data, pos, source_widget)
         ark_reference = self.extract_ark_drop_reference(mime_data)
+        if self.current_location is not None and self.current_location.is_remote:
+            if ark_reference is not None:
+                return False
+            local_source_paths = [path for path in source_paths if Path(path).exists()]
+            if not local_source_paths:
+                return False
+            return self._paste_local_paths_to_remote(local_source_paths, target_dir)
         return self._drop_service.handle_tree_drop(
             source_paths=source_paths,
             target_dir=target_dir,
@@ -2558,12 +3095,67 @@ class PaneController(QObject):
         )
 
         if self.current_location is not None and self.current_location.is_remote:
+            destination_dir = self.resolve_drop_target_directory(pos, source_view=source_view)
+            current_index = source_view.indexAt(pos) if source_view is not None and hasattr(source_view, "indexAt") else QModelIndex()
+            selected_remote_locations = self._selected_remote_locations()
+            has_selection = bool(selected_remote_locations)
+            clipboard = QApplication.clipboard()
+            clipboard_paths = self.extract_paths_from_mime(clipboard.mimeData())
+            remote_clipboard_locations = self._extract_remote_locations_from_mime(clipboard.mimeData())
+
             action_refresh = menu.addAction(
                 self._tab_menu_icon("view-refresh", QStyle.StandardPixmap.SP_BrowserReload),
                 app_tr("PaneController", "Aktualisieren"),
             )
-            current_index = source_view.indexAt(pos) if source_view is not None and hasattr(source_view, "indexAt") else QModelIndex()
+
+            new_folder_icon = QIcon.fromTheme("folder-new")
+            if new_folder_icon.isNull():
+                new_folder_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder)
+            action_new_folder = menu.addAction(new_folder_icon, app_tr("PaneController", "Neuer Ordner"))
+            action_new_folder.setShortcut(QKeySequence("Ctrl+Shift+N"))
+            action_new_folder.setShortcutVisibleInContextMenu(True)
+
+            new_file_icon = QIcon.fromTheme("document-new")
+            if new_file_icon.isNull():
+                new_file_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+            action_new_file = menu.addAction(new_file_icon, app_tr("PaneController", "Neue Datei"))
+            action_new_file.setShortcut(QKeySequence("Ctrl+N"))
+            action_new_file.setShortcutVisibleInContextMenu(True)
+
+            menu.addSeparator()
+
+            duplicate_icon = QIcon.fromTheme("edit-copy")
+            if duplicate_icon.isNull():
+                duplicate_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+            action_duplicate = menu.addAction(duplicate_icon, app_tr("PaneController", "Duplizieren"))
+            action_duplicate.setShortcut(QKeySequence("Ctrl+D"))
+            action_duplicate.setShortcutVisibleInContextMenu(True)
+
+            copy_icon = QIcon.fromTheme("edit-copy")
+            if copy_icon.isNull():
+                copy_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+            action_copy = menu.addAction(copy_icon, app_tr("PaneController", "Kopieren"))
+            action_copy.setShortcut(QKeySequence.StandardKey.Copy)
+            action_copy.setShortcutVisibleInContextMenu(True)
+
+            cut_icon = QIcon.fromTheme("edit-cut")
+            if cut_icon.isNull():
+                cut_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight)
+            action_cut = menu.addAction(cut_icon, app_tr("PaneController", "Ausschneiden"))
+            action_cut.setShortcut(QKeySequence.StandardKey.Cut)
+            action_cut.setShortcutVisibleInContextMenu(True)
+
+            paste_icon = QIcon.fromTheme("edit-paste")
+            if paste_icon.isNull():
+                paste_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
+            action_paste = menu.addAction(paste_icon, app_tr("PaneController", "Einfügen"))
+            action_paste.setShortcut(QKeySequence.StandardKey.Paste)
+            action_paste.setShortcutVisibleInContextMenu(True)
+
+            menu.addSeparator()
+
             action_open_browser = None
+            action_open_local = None
             active_model = source_view.model() if source_view is not None else None
             if (
                 active_model is not None
@@ -2577,12 +3169,60 @@ class PaneController(QObject):
                     self._tab_menu_icon("document-open", QStyle.StandardPixmap.SP_DialogOpenButton),
                     app_tr("PaneController", "Im Browser öffnen"),
                 )
+                action_open_local = menu.addAction(
+                    self._tab_menu_icon("document-save", QStyle.StandardPixmap.SP_DialogSaveButton),
+                    app_tr("PaneController", "Lokal herunterladen und öffnen"),
+                )
+
+            menu.addSeparator()
+
+            rename_icon = QIcon.fromTheme("edit-rename")
+            if rename_icon.isNull():
+                rename_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
+            action_rename = menu.addAction(rename_icon, app_tr("PaneController", "Umbenennen"))
+            action_rename.setShortcut(QKeySequence(Qt.Key.Key_F2))
+            action_rename.setShortcutVisibleInContextMenu(True)
+
+            delete_icon = QIcon.fromTheme("edit-delete")
+            if delete_icon.isNull():
+                delete_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
+            action_delete = menu.addAction(delete_icon, app_tr("PaneController", "Löschen"))
+            action_delete.setShortcut(QKeySequence(Qt.Key.Key_Delete))
+            action_delete.setShortcutVisibleInContextMenu(True)
+
+            action_duplicate.setEnabled(has_selection)
+            action_copy.setEnabled(has_selection)
+            action_cut.setEnabled(has_selection)
+            action_rename.setEnabled(current_index.isValid() and has_selection)
+            action_delete.setEnabled(has_selection)
+            action_paste.setEnabled(bool(clipboard_paths or remote_clipboard_locations) and bool(destination_dir))
 
             chosen = menu.exec(source_view.viewport().mapToGlobal(pos))
             if chosen == action_refresh:
                 self.refresh_current_directory(force_rescan=True)
+            elif chosen == action_new_folder:
+                self.create_folder(destination_dir)
+            elif chosen == action_new_file:
+                self.create_file(destination_dir)
+            elif chosen == action_duplicate:
+                self.duplicate_selection()
+            elif chosen == action_copy:
+                self.copy_selection_to_clipboard()
+            elif chosen == action_cut:
+                self.cut_selection_to_clipboard()
+            elif chosen == action_paste:
+                self.paste_from_clipboard(destination_dir)
             elif chosen == action_open_browser and active_model is not None:
                 QDesktopServices.openUrl(QUrl(str(active_model.fileUrl(current_index))))
+            elif chosen == action_open_local and active_model is not None:
+                remote_location = PaneLocation(kind="remote", path=str(active_model.filePath(current_index) or ""), remote_id=self.current_location.remote_id)
+                cached_path = self._download_remote_file_for_open(remote_location)
+                if cached_path:
+                    self._open_service.open_default(cached_path)
+            elif chosen == action_delete:
+                self.delete_selected_paths(permanent=None)
+            elif chosen == action_rename:
+                self.rename_current_item()
             return
 
         if self._delete_service.is_trash_context(self.current_location.path):
@@ -2629,7 +3269,13 @@ class PaneController(QObject):
         action_new_folder.setShortcut(QKeySequence("Ctrl+Shift+N"))
         action_new_folder.setShortcutVisibleInContextMenu(True)
         destination_dir = self.resolve_drop_target_directory(pos, source_view=source_view)
-        action_new_folder.setEnabled(QDir(destination_dir).exists())
+        action_new_folder.setEnabled(
+            bool(destination_dir)
+            and (
+                (self.current_location is not None and self.current_location.is_remote)
+                or QDir(destination_dir).exists()
+            )
+        )
 
         new_file_icon = QIcon.fromTheme("document-new")
         if new_file_icon.isNull():
@@ -2731,7 +3377,13 @@ class PaneController(QObject):
         action_rename.setEnabled(current_index.isValid() and self.selected_count() > 0)
 
         clipboard_paths = self.extract_paths_from_mime(QApplication.clipboard().mimeData())
-        action_paste.setEnabled(bool(clipboard_paths) and QDir(destination_dir).exists())
+        action_paste.setEnabled(
+            bool(clipboard_paths)
+            and (
+                (self.current_location is not None and self.current_location.is_remote)
+                or QDir(destination_dir).exists()
+            )
+        )
 
         chosen = menu.exec(source_view.viewport().mapToGlobal(pos))
         if chosen in open_with_actions:
@@ -2899,10 +3551,14 @@ class PaneController(QObject):
                 self.navigate_to(clean_path)
             return
 
-        if self.current_location.is_remote and hasattr(active_model, "fileUrl"):
-            remote_url = str(active_model.fileUrl(index) or "").strip()
-            if remote_url:
-                QDesktopServices.openUrl(QUrl(remote_url))
+        if self.current_location.is_remote:
+            remote_location = PaneLocation(kind="remote", path=clean_path, remote_id=self.current_location.remote_id)
+            if self._open_remote_file_via_rule(remote_location):
+                return
+            if not self._open_remote_file_in_browser(remote_location):
+                cached_path = self._download_remote_file_for_open(remote_location)
+                if cached_path:
+                    self._open_service.open_default(cached_path)
             return
 
         if not Path(clean_path).exists():
@@ -2984,7 +3640,14 @@ class PaneController(QObject):
             if self.icon_view is not None:
                 self.icon_view.setRootIndex(QModelIndex())
             if self.path_bar:
-                self.path_bar.set_location(location)
+                self.path_bar.set_location(
+                    location,
+                    root_label=self._path_bar_root_label_for_location(location),
+                )
+            self._apply_tree_header_translations()
+            self._apply_visible_tree_columns()
+            self.apply_current_sort()
+            self.optimize_columns()
             self.currentPathChanged.emit(location.path)
             self.emit_navigation_state()
             return
@@ -3001,7 +3664,10 @@ class PaneController(QObject):
                 self.icon_view.setRootIndex(index)
 
         if self.path_bar:
-            self.path_bar.set_location(location)
+            self.path_bar.set_location(
+                location,
+                root_label=self._path_bar_root_label_for_location(location),
+            )
 
         self.currentPathChanged.emit(target_path)
         self.emit_navigation_state()
@@ -3084,7 +3750,8 @@ class PaneController(QObject):
         self.tree_view.setRootIsDecorated(False)
         self.tree_view.setItemsExpandable(False)
         self.tree_view.setIndentation(0)
-        for column in range(1, self.model.columnCount()):
+        active_model = self._active_file_model()
+        for column in range(1, active_model.columnCount() if active_model is not None else 1):
             self.tree_view.setColumnHidden(column, True)
 
         self.apply_icon_zoom()
@@ -3130,6 +3797,9 @@ class PaneController(QObject):
     def optimize_columns(self):
         if self._dispose_prepared or self.tree_view is None:
             return
+        active_model = self._active_file_model()
+        if active_model is None:
+            return
 
         if self.filetree_view_mode == "icons":
             if self.icon_view is not None:
@@ -3141,7 +3811,7 @@ class PaneController(QObject):
 
         try:
             if self.filetree_view_mode == "details":
-                for column in range(self.model.columnCount()):
+                for column in range(active_model.columnCount()):
                     self.tree_view.resizeColumnToContents(column)
             else:
                 self.tree_view.resizeColumnToContents(0)
@@ -3150,6 +3820,9 @@ class PaneController(QObject):
 
     def apply_current_sort(self):
         if self._dispose_prepared or self.tree_view is None:
+            return
+        active_model = self._active_file_model()
+        if active_model is None:
             return
 
         try:
@@ -3162,7 +3835,7 @@ class PaneController(QObject):
         section = header.sortIndicatorSection()
         order = header.sortIndicatorOrder()
         try:
-            self.model.sort(section, order)
+            active_model.sort(section, order)
             self.tree_view.sortByColumn(section, order)
         except RuntimeError:
             return

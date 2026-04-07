@@ -16,6 +16,9 @@ class EditorSettings:
         self._middle_click_new_tab_behavior = "background"
         self._visible_file_tree_columns = [0, 1, 2, 3]
         self._show_hidden_files = False
+        self._settings_dialog_width = 920
+        self._settings_dialog_height = 620
+        self._remote_open_rules = []
         self.load()
 
     @property
@@ -60,6 +63,18 @@ class EditorSettings:
     def show_hidden_files(self) -> bool:
         return self._show_hidden_files
 
+    @property
+    def settings_dialog_width(self) -> int:
+        return int(self._settings_dialog_width)
+
+    @property
+    def settings_dialog_height(self) -> int:
+        return int(self._settings_dialog_height)
+
+    @property
+    def remote_open_rules(self) -> list[dict]:
+        return [dict(item) for item in self._remote_open_rules]
+
     def _normalize_visible_file_tree_columns(self, value) -> list[int]:
         if not isinstance(value, list):
             return [0, 1, 2, 3]
@@ -78,6 +93,27 @@ class EditorSettings:
         if not normalized:
             return [0]
         return sorted(normalized)
+
+    def _normalize_remote_open_rules(self, value) -> list[dict]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            extensions = str(item.get("extensions") or "").strip().lower()
+            command = str(item.get("command") or "").strip()
+            arguments = str(item.get("arguments") or "").strip()
+            if not extensions or not command:
+                continue
+            normalized.append(
+                {
+                    "extensions": extensions,
+                    "command": command,
+                    "arguments": arguments,
+                }
+            )
+        return normalized
 
     def load(self) -> None:
         if not self.storage_path.exists():
@@ -108,6 +144,17 @@ class EditorSettings:
             payload.get("visible_file_tree_columns", [0, 1, 2, 3])
         )
         self._show_hidden_files = bool(payload.get("show_hidden_files", False))
+        self._remote_open_rules = self._normalize_remote_open_rules(payload.get("remote_open_rules", []))
+        try:
+            width = int(payload.get("settings_dialog_width", 920))
+        except (TypeError, ValueError):
+            width = 920
+        try:
+            height = int(payload.get("settings_dialog_height", 620))
+        except (TypeError, ValueError):
+            height = 620
+        self._settings_dialog_width = max(720, width)
+        self._settings_dialog_height = max(520, height)
 
     def save(self) -> None:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -121,6 +168,9 @@ class EditorSettings:
             "middle_click_new_tab_behavior": self._middle_click_new_tab_behavior,
             "visible_file_tree_columns": list(self._visible_file_tree_columns),
             "show_hidden_files": self._show_hidden_files,
+            "remote_open_rules": list(self._remote_open_rules),
+            "settings_dialog_width": self._settings_dialog_width,
+            "settings_dialog_height": self._settings_dialog_height,
         }
         self.storage_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -192,3 +242,32 @@ class EditorSettings:
             return
         self._show_hidden_files = normalized
         self.save()
+
+    def update_settings_dialog_size(self, width: int, height: int) -> None:
+        normalized_width = max(720, int(width or 920))
+        normalized_height = max(520, int(height or 620))
+        if (
+            normalized_width == self._settings_dialog_width
+            and normalized_height == self._settings_dialog_height
+        ):
+            return
+        self._settings_dialog_width = normalized_width
+        self._settings_dialog_height = normalized_height
+        self.save()
+
+    def update_remote_open_rules(self, rules) -> None:
+        normalized = self._normalize_remote_open_rules(rules)
+        if normalized == self._remote_open_rules:
+            return
+        self._remote_open_rules = normalized
+        self.save()
+
+    def remote_open_rule_for(self, path: str) -> dict | None:
+        suffix = Path(str(path or "")).suffix.lower().lstrip(".")
+        if not suffix:
+            return None
+        for item in self._remote_open_rules:
+            extensions = [part.strip().lower().lstrip(".") for part in str(item.get("extensions") or "").split(",")]
+            if suffix in {part for part in extensions if part}:
+                return dict(item)
+        return None

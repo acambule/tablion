@@ -65,7 +65,11 @@ class PaneStateService:
         selected_paths: list[str],
         scroll_value: int,
     ) -> None:
-        state.location = self.make_location(current_path)
+        state.location = self.make_location(
+            current_path,
+            kind=state.location.kind,
+            remote_id=state.location.remote_id,
+        )
         state.view_mode = view_mode
         state.icon_zoom_percent = max(50, min(300, int(icon_zoom_percent)))
         state.scroll_value = max(0, int(scroll_value or 0))

@@ -27,7 +27,7 @@ class OneDriveAuthError(RuntimeError):
 
 
 class OneDriveAuthService:
-    DEVICE_CODE_SCOPE = "offline_access Files.ReadWrite User.Read"
+    DEVICE_CODE_SCOPE = "offline_access Files.ReadWrite Files.ReadWrite.All User.Read Sites.Read.All Sites.ReadWrite.All Team.ReadBasic.All"
 
     def authenticate(
         self,

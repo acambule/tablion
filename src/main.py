@@ -776,8 +776,8 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched, event):
         try:
             if watched == self.ui and event.type() == QEvent.Type.Close:
-                self.prepare_for_shutdown()
                 self.persist_app_state()
+                self.prepare_for_shutdown()
 
             if self.group_tabs and watched == self.group_tabs:
                 if event.type() == QEvent.Type.MouseButtonDblClick and event.button() == Qt.MouseButton.LeftButton:
@@ -1068,13 +1068,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         debug_log("MainWindow.closeEvent received")
-        self.prepare_for_shutdown()
         self.persist_app_state()
+        self.prepare_for_shutdown()
         super().closeEvent(event)
 
     def quit_application(self):
-        self.prepare_for_shutdown()
         self.persist_app_state()
+        self.prepare_for_shutdown()
         QApplication.instance().quit()
 
     def prepare_for_shutdown(self):

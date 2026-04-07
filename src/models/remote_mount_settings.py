@@ -16,6 +16,8 @@ class RemoteMountDefinition:
     scope: str = "personal"
     drive_id: str = ""
     site_id: str = ""
+    team_id: str = ""
+    team_label: str = ""
     root_item_id: str = ""
     root_path: str = "/"
     enabled: bool = True
@@ -88,6 +90,8 @@ class RemoteMountSettings:
                     "scope": mount.scope,
                     "connection_id": mount.connection_id,
                     "drive_id": mount.drive_id or connection.drive_id,
+                    "team_id": mount.team_id,
+                    "team_label": mount.team_label,
                     "account_label": connection.account_label,
                 }
             )
@@ -168,6 +172,8 @@ class RemoteMountSettings:
             scope=scope,
             drive_id=str(value.get("drive_id") or "").strip(),
             site_id=str(value.get("site_id") or "").strip(),
+            team_id=str(value.get("team_id") or "").strip(),
+            team_label=str(value.get("team_label") or "").strip(),
             root_item_id=str(value.get("root_item_id") or "").strip(),
             root_path=root_path,
             enabled=bool(value.get("enabled", True)),
