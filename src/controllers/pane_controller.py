@@ -1,6 +1,4 @@
-import json
 import os
-from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex, QProcess, QThread
@@ -22,10 +20,15 @@ from controllers.view_adapters import IconViewAdapter, TreeViewAdapter
 from domain.filesystem import PaneLocation
 from models.file_operations import FileOperations
 from services.file_actions import (
+    ArkDropService,
     ArchiveService,
     BatchRenameService,
     CreationService,
     DeleteService,
+    DropService,
+    DropUiService,
+    FileOperationService,
+    FileOperationWorker,
     LinkService,
     OpenService,
     TransferService,
@@ -37,57 +40,6 @@ from widgets.path_bar import PathBar
 from widgets.properties_dialog import PropertiesDialog
 from utils.open_with import applications_for_path
 from models.pane_tab_state import TabState
-
-
-@dataclass(frozen=True)
-class FileOperationTask:
-    source_path: str
-    target_path: str
-    name: str
-
-
-class FileOperationWorker(QObject):
-    progressChanged = Signal(int, int, str)
-    finished = Signal(dict)
-
-    def __init__(self, file_operations, operation, tasks, parent=None):
-        super().__init__(parent)
-        self._file_operations = file_operations
-        self._operation = operation
-        self._tasks = list(tasks)
-
-    def run(self):
-        total = len(self._tasks)
-        completed = 0
-        errors = []
-
-        for index, task in enumerate(self._tasks, start=1):
-            if self._operation == "move":
-                label = app_tr("PaneController", "Verschiebe: {name}").format(name=task.name)
-            else:
-                label = app_tr("PaneController", "Kopiere: {name}").format(name=task.name)
-            self.progressChanged.emit(index - 1, total, label)
-
-            try:
-                if self._operation == "move":
-                    self._file_operations.move(task.source_path, task.target_path, overwrite=False)
-                else:
-                    self._file_operations.copy(task.source_path, task.target_path, overwrite=False)
-                completed += 1
-            except (FileExistsError, FileNotFoundError, OSError, ValueError) as error:
-                errors.append(str(error))
-
-            self.progressChanged.emit(index, total, label)
-
-        self.finished.emit(
-            {
-                "operation": self._operation,
-                "requested_count": total,
-                "completed_count": completed,
-                "error_count": len(errors),
-                "errors": errors,
-            }
-        )
 
 
 class RecursiveSearchWorker(QObject):
@@ -286,7 +238,11 @@ class PaneController(QObject):
         self._delete_service = DeleteService()
         self._batch_rename_service = BatchRenameService()
         self._archive_service = ArchiveService()
+        self._ark_drop_service = ArkDropService()
         self._creation_service = CreationService()
+        self._file_operation_service = FileOperationService()
+        self._drop_service = DropService()
+        self._drop_ui_service = DropUiService()
         self._link_service = LinkService()
         self._transfer_service = TransferService()
         self._trash_restore_service = TrashRestoreService()
@@ -1801,106 +1757,20 @@ class PaneController(QObject):
         )
 
     def extract_paths_from_mime(self, mime_data):
-        if mime_data is None:
-            return []
-
-        format_list = list(mime_data.formats())
-        has_relevant = any(
-            mime_data.hasFormat(mime_name)
-            for mime_name in (
-                self._INTERNAL_DRAG_MIME_TYPE,
-                self._CLIPBOARD_MIME_TYPE,
-                self._ARK_DND_SERVICE_MIME,
-                self._ARK_DND_PATH_MIME,
-                "text/uri-list",
-                "application/x-kde4-urilist",
-                "application/x-kde-urilist",
-                "x-special/gnome-copied-files",
-            )
-        ) or mime_data.hasUrls()
-        if has_relevant:
-            debug_log(f"DND extract_paths_from_mime: incoming_formats={format_list}")
-
-        paths = []
-
-        def append_uri_paths(raw_uri_list, log_label):
-            if not raw_uri_list:
-                return
-            for line in raw_uri_list.splitlines():
-                candidate = line.strip()
-                if not candidate or candidate.startswith("#") or candidate in {"copy", "cut"}:
-                    continue
-                url = QUrl(candidate)
-                if not url.isValid() or not url.isLocalFile():
-                    continue
-                path = QDir.cleanPath(url.toLocalFile())
-                if path:
-                    paths.append(path)
-            debug_log(f"DND extract_paths_from_mime: {log_label}={raw_uri_list!r}")
-
-        if mime_data.hasFormat(self._INTERNAL_DRAG_MIME_TYPE):
-            raw_internal_paths = bytes(mime_data.data(self._INTERNAL_DRAG_MIME_TYPE)).decode("utf-8", errors="ignore")
-            for line in raw_internal_paths.splitlines():
-                candidate = QDir.cleanPath(line.strip())
-                if candidate:
-                    paths.append(candidate)
-            if raw_internal_paths.strip():
-                debug_log(f"DND extract_paths_from_mime: internal_paths={paths[:5]}")
-            unique_paths = list(dict.fromkeys(paths))
-            debug_log(f"DND extract_paths_from_mime: resolved_paths={unique_paths[:5]} count={len(unique_paths)}")
-            return unique_paths
-
-        if mime_data.hasFormat(self._CLIPBOARD_MIME_TYPE):
-            raw = bytes(mime_data.data(self._CLIPBOARD_MIME_TYPE)).decode("utf-8", errors="ignore")
-            try:
-                parsed = json.loads(raw)
-            except json.JSONDecodeError:
-                parsed = []
-            if isinstance(parsed, list):
-                for item in parsed:
-                    path = QDir.cleanPath(str(item))
-                    if path:
-                        paths.append(path)
-
-        if mime_data.hasUrls():
-            for url in mime_data.urls():
-                if not url.isLocalFile():
-                    continue
-                path = QDir.cleanPath(url.toLocalFile())
-                if path:
-                    paths.append(path)
-            if paths:
-                debug_log(f"DND extract_paths_from_mime: urls_paths={paths[:5]}")
-
-        if mime_data.hasFormat("text/uri-list"):
-            raw_uri_list = bytes(mime_data.data("text/uri-list")).decode("utf-8", errors="ignore")
-            append_uri_paths(raw_uri_list, "uri_list_raw")
-
-        if mime_data.hasFormat("application/x-kde4-urilist"):
-            raw_kde4_uri_list = bytes(mime_data.data("application/x-kde4-urilist")).decode("utf-8", errors="ignore")
-            append_uri_paths(raw_kde4_uri_list, "kde4_uri_list_raw")
-
-        if mime_data.hasFormat("application/x-kde-urilist"):
-            raw_kde_uri_list = bytes(mime_data.data("application/x-kde-urilist")).decode("utf-8", errors="ignore")
-            append_uri_paths(raw_kde_uri_list, "kde_uri_list_raw")
-
-        if mime_data.hasFormat("x-special/gnome-copied-files"):
-            raw_gnome_uri_list = bytes(mime_data.data("x-special/gnome-copied-files")).decode("utf-8", errors="ignore")
-            append_uri_paths(raw_gnome_uri_list, "gnome_uri_list_raw")
-
-        unique_paths = list(dict.fromkeys(paths))
-        if has_relevant:
-            debug_log(f"DND extract_paths_from_mime: resolved_paths={unique_paths[:5]} count={len(unique_paths)}")
-        return unique_paths
+        return self._transfer_service.extract_paths_from_mime(
+            mime_data,
+            internal_drag_mime_type=self._INTERNAL_DRAG_MIME_TYPE,
+            clipboard_mime_type=self._CLIPBOARD_MIME_TYPE,
+            ark_dnd_service_mime=self._ARK_DND_SERVICE_MIME,
+            ark_dnd_path_mime=self._ARK_DND_PATH_MIME,
+            logger=debug_log,
+        )
 
     def extract_operation_from_mime(self, mime_data):
-        if mime_data is None:
-            return "copy"
-        if not mime_data.hasFormat(self._CLIPBOARD_OPERATION_MIME_TYPE):
-            return "copy"
-
-        raw = bytes(mime_data.data(self._CLIPBOARD_OPERATION_MIME_TYPE)).decode("utf-8", errors="ignore").strip().lower()
-        return "cut" if raw == "cut" else "copy"
+        return self._transfer_service.extract_operation_from_mime(
+            mime_data,
+            operation_mime_type=self._CLIPBOARD_OPERATION_MIME_TYPE,
+        )
 
     def extract_paths_from_drag_source(self, source_widget):
         if self.tree_view_adapter is None and self.icon_view_adapter is None:
@@ -1917,18 +1787,12 @@ class PaneController(QObject):
         return []
 
     def extract_ark_drop_reference(self, mime_data):
-        if mime_data is None:
-            return None
-        if not mime_data.hasFormat(self._ARK_DND_SERVICE_MIME) or not mime_data.hasFormat(self._ARK_DND_PATH_MIME):
-            return None
-
-        service = bytes(mime_data.data(self._ARK_DND_SERVICE_MIME)).decode("utf-8", errors="ignore").strip()
-        object_path = bytes(mime_data.data(self._ARK_DND_PATH_MIME)).decode("utf-8", errors="ignore").strip()
-        if not service or not object_path:
-            return None
-
-        debug_log(f"DND Ark reference: service={service!r} path={object_path!r}")
-        return service, object_path
+        return self._drop_service.extract_ark_drop_reference(
+            mime_data,
+            service_mime=self._ARK_DND_SERVICE_MIME,
+            path_mime=self._ARK_DND_PATH_MIME,
+            logger=debug_log,
+        )
 
     def resolve_drop_target_directory(self, pos=None, source_view=None):
         if source_view is self.icon_view and self.icon_view_adapter is not None:
@@ -2035,14 +1899,9 @@ class PaneController(QObject):
                 clipboard.clear(mode=clipboard.Mode.Clipboard)
                 self.clear_cut_state()
 
-            if operation == "move":
-                self.show_operation_feedback(
-                    app_tr("PaneController", "{count} Element(e) verschoben").format(count=completed_count)
-                )
-            else:
-                self.show_operation_feedback(
-                    app_tr("PaneController", "{count} Element(e) kopiert").format(count=completed_count)
-                )
+            self.show_operation_feedback(
+                self._file_operation_service.success_feedback(operation, completed_count)
+            )
 
         if error_messages:
             QMessageBox.warning(
@@ -2061,22 +1920,8 @@ class PaneController(QObject):
             return False
 
         destination_name = Path(QDir.cleanPath(target_directory)).name or QDir.cleanPath(target_directory)
-        dialog_title = (
-            app_tr("PaneController", "Elemente verschieben")
-            if operation == "move"
-            else app_tr("PaneController", "Elemente kopieren")
-        )
-        label_text = (
-            app_tr("PaneController", "Verschiebe {count} Element(e) nach {target}...").format(
-                count=len(tasks),
-                target=destination_name,
-            )
-            if operation == "move"
-            else app_tr("PaneController", "Kopiere {count} Element(e) nach {target}...").format(
-                count=len(tasks),
-                target=destination_name,
-            )
-        )
+        dialog_title = self._file_operation_service.dialog_title(operation)
+        label_text = self._file_operation_service.dialog_label(operation, len(tasks), destination_name)
 
         self._pending_file_operation = {
             "operation": operation,
@@ -2108,9 +1953,6 @@ class PaneController(QObject):
 
     def copy_paths_to_directory(self, source_paths, target_directory):
         return self._start_file_operation(source_paths, target_directory, "copy")
-
-    def build_next_duplicate_path(self, source_path, target_dir):
-        return self._transfer_service.build_next_duplicate_path(source_path, target_dir)
 
     def duplicate_selection(self):
         source_paths = self.selected_paths()
@@ -2154,38 +1996,6 @@ class PaneController(QObject):
             )
         return changes_applied
 
-    def is_trash_context(self):
-        current_path = Path(QDir.cleanPath(self.current_directory)).expanduser()
-
-        local_trash_files = (Path.home() / ".local" / "share" / "Trash" / "files").resolve()
-        try:
-            resolved_current = current_path.resolve()
-            if resolved_current == local_trash_files or local_trash_files in resolved_current.parents:
-                return True
-        except OSError:
-            resolved_current = current_path
-
-        parts = resolved_current.parts
-        if len(parts) >= 2 and parts[-1] == "files":
-            parent_name = parts[-2]
-            if parent_name == "Trash" or parent_name.startswith(".Trash-"):
-                return True
-
-        return False
-
-    def is_temporary_context(self):
-        current_path = Path(QDir.cleanPath(self.current_directory)).expanduser()
-        tmp_roots = [Path("/tmp").resolve(), Path("/var/tmp").resolve()]
-        try:
-            resolved_current = current_path.resolve()
-        except OSError:
-            resolved_current = current_path
-
-        for root in tmp_roots:
-            if resolved_current == root or root in resolved_current.parents:
-                return True
-        return False
-
     def delete_selected_paths(self, permanent=None):
         selected = self.selected_paths()
         if not selected:
@@ -2198,7 +2008,7 @@ class PaneController(QObject):
             return
 
         if permanent is None:
-            permanent = self.is_trash_context() or self.is_temporary_context()
+            permanent = self._delete_service.resolve_permanent_default(self.current_directory)
 
         title, message = self._delete_service.build_confirmation(existing_selected, permanent)
         confirmed = ask_yes_no(
@@ -2507,11 +2317,16 @@ class PaneController(QObject):
         QTimer.singleShot(0, self._restore_active_view_focus_if_alive)
 
     def resolve_drop_context(self, mime_data, pos, source_widget=None, source_view=None):
-        source_paths = self.extract_paths_from_mime(mime_data)
-        if not source_paths:
-            source_paths = self.extract_paths_from_drag_source(source_widget)
-        target_dir = self.resolve_drop_target_directory(pos, source_view=source_view)
-        return source_paths, target_dir
+        context = self._drop_service.resolve_drop_context(
+            mime_data,
+            pos=pos,
+            source_widget=source_widget,
+            source_view=source_view,
+            extract_paths_from_mime=self.extract_paths_from_mime,
+            extract_paths_from_drag_source=self.extract_paths_from_drag_source,
+            resolve_drop_target_directory=self.resolve_drop_target_directory,
+        )
+        return context.source_paths, context.target_dir
 
     def can_accept_tree_drop(self, mime_data, pos, source_widget=None, source_paths=None, target_dir=None):
         if source_paths is None or target_dir is None:
@@ -2521,38 +2336,24 @@ class PaneController(QObject):
             self.clear_drop_target_visual()
             return False
 
-        return QDir(target_dir).exists()
-
-    def _is_same_filesystem(self, source_path, target_dir):
-        try:
-            return Path(source_path).resolve().stat().st_dev == Path(target_dir).resolve().stat().st_dev
-        except OSError:
-            return False
-
-    def _is_internal_drop_source(self, mime_data=None, source_widget=None):
-        if mime_data is not None and mime_data.hasFormat(self._INTERNAL_DRAG_MIME_TYPE):
-            return True
-
-        if source_widget is None:
-            return False
-
-        tree_viewport = self.tree_view.viewport() if self.tree_view is not None else None
-        icon_viewport = self.icon_view.viewport() if self.icon_view is not None else None
-        return source_widget in {self.tree_view, self.icon_view, tree_viewport, icon_viewport, self.tab_bar}
+        return self._drop_service.can_accept_tree_drop(
+            source_paths=source_paths,
+            target_dir=target_dir,
+            ark_reference=ark_reference,
+        )
 
     def resolve_drop_action(self, event, source_paths=None, target_dir=None, mime_data=None, source_widget=None):
-        if event.modifiers() & Qt.KeyboardModifier.AltModifier:
-            return Qt.DropAction.LinkAction
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            return Qt.DropAction.CopyAction
-        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-            return Qt.DropAction.MoveAction
-
-        if source_paths and target_dir and self._is_internal_drop_source(mime_data=mime_data, source_widget=source_widget):
-            same_fs = all(self._is_same_filesystem(source_path, target_dir) for source_path in source_paths)
-            return Qt.DropAction.MoveAction if same_fs else Qt.DropAction.CopyAction
-
-        return Qt.DropAction.CopyAction
+        tree_viewport = self.tree_view.viewport() if self.tree_view is not None else None
+        icon_viewport = self.icon_view.viewport() if self.icon_view is not None else None
+        return self._drop_service.resolve_drop_action(
+            event=event,
+            source_paths=source_paths or [],
+            target_dir=target_dir or "",
+            mime_data=mime_data,
+            source_widget=source_widget,
+            internal_drag_mime_type=self._INTERNAL_DRAG_MIME_TYPE,
+            internal_widgets={self.tree_view, self.icon_view, tree_viewport, icon_viewport, self.tab_bar},
+        )
 
     def _finish_ark_drop(self, watcher=None, error_message=None):
         if watcher is not None:
@@ -2578,52 +2379,28 @@ class PaneController(QObject):
 
     def extract_ark_drop_to_directory(self, service, object_path, target_dir):
         destination = QDir.cleanPath(target_dir)
-        if not destination:
-            return False
-
-        if QDBusConnection is not None and QDBusMessage is not None and QDBusPendingCallWatcher is not None:
-            message = QDBusMessage.createMethodCall(
-                service,
-                object_path,
-                "org.kde.ark.DndExtract",
-                "extractSelectedFilesTo",
-            )
-            message.setArguments([destination])
-            pending_call = QDBusConnection.sessionBus().asyncCall(message)
-            watcher = QDBusPendingCallWatcher(pending_call, self)
-            self._ark_drop_watchers.add(watcher)
-
-            def on_finished(*_args):
-                reply = watcher.reply()
-                if reply.type() == QDBusMessage.MessageType.ErrorMessage:
-                    self._finish_ark_drop(
-                        watcher=watcher,
-                        error_message=app_tr("PaneController", "Ark konnte die Auswahl nicht extrahieren."),
-                    )
-                    return
-                self._finish_ark_drop(watcher=watcher)
-
-            watcher.finished.connect(on_finished)
-            debug_log(f"DND Ark extract started via QtDBus: service={service!r} path={object_path!r} target={destination!r}")
+        started = self._ark_drop_service.start_extract(
+            service=service,
+            object_path=object_path,
+            destination=destination,
+            qdbus_connection=QDBusConnection,
+            qdbus_message_cls=QDBusMessage,
+            qdbus_pending_call_watcher_cls=QDBusPendingCallWatcher,
+            parent=self,
+            watcher_store=self._ark_drop_watchers,
+            finish_callback=self._finish_ark_drop,
+            process_cls=QProcess,
+            timer_cls=QTimer,
+            logger=debug_log,
+        )
+        if started:
             return True
-
-        for program in ("qdbus6", "qdbus"):
-            executable = QProcess()
-            executable.start(program, [service, object_path, "org.kde.ark.DndExtract.extractSelectedFilesTo", destination])
-            if not executable.waitForStarted(250):
-                continue
-            executable.waitForFinished(5000)
-            if executable.exitStatus() == QProcess.ExitStatus.NormalExit and executable.exitCode() == 0:
-                debug_log(f"DND Ark extract started via {program}: service={service!r} path={object_path!r} target={destination!r}")
-                QTimer.singleShot(800, lambda: self._finish_ark_drop())
-                return True
 
         QMessageBox.warning(
             self.widget,
             app_tr("PaneController", "Ablage fehlgeschlagen"),
             app_tr("PaneController", "Ark-Drop wird auf diesem System nicht unterstützt."),
         )
-        debug_log("DND Ark extract failed: no QtDBus and no qdbus fallback available")
         return False
 
     def update_drop_target_visual(self, pos, drop_action=None):
@@ -2631,25 +2408,11 @@ class PaneController(QObject):
             drop_action = Qt.DropAction.MoveAction
 
         target_view = self.active_item_view()
-        if target_view is None:
-            return
-
-        index = target_view.indexAt(pos)
-        highlight_index = QModelIndex()
-        highlight_root = False
-
-        if index.isValid():
-            target_path = QDir.cleanPath(self.model.filePath(index))
-            if self.model.isDir(index) and QDir(target_path).exists():
-                highlight_index = index
-            else:
-                parent_index = index.parent()
-                if parent_index.isValid():
-                    highlight_index = parent_index
-                else:
-                    highlight_root = True
-        else:
-            highlight_root = True
+        highlight_index, highlight_root = self._drop_ui_service.compute_highlight(
+            target_view=target_view,
+            pos=pos,
+            file_model=self.model,
+        )
 
         self._drop_target_index = highlight_index if highlight_index.isValid() else QModelIndex()
         self._drop_target_is_root = highlight_root
@@ -2660,12 +2423,7 @@ class PaneController(QObject):
             self._drop_target_delegate.clear_drop_target_index()
             self._drop_target_delegate.set_drop_action(Qt.DropAction.IgnoreAction)
         if self._drop_target_is_root:
-            if drop_action == Qt.DropAction.CopyAction:
-                target_view.viewport().setStyleSheet("background-color: rgba(128, 128, 128, 24); border: 1px dashed rgba(110, 110, 110, 120);")
-            elif drop_action == Qt.DropAction.LinkAction:
-                target_view.viewport().setStyleSheet("background-color: rgba(128, 128, 128, 18); border: 1px dotted rgba(110, 110, 110, 140);")
-            else:
-                target_view.viewport().setStyleSheet("background-color: rgba(128, 128, 128, 36); border: 1px solid rgba(110, 110, 110, 140);")
+            target_view.viewport().setStyleSheet(self._drop_ui_service.root_stylesheet(drop_action))
         else:
             target_view.viewport().setStyleSheet("")
         target_view.viewport().update()
@@ -2696,23 +2454,16 @@ class PaneController(QObject):
         if source_paths is None or target_dir is None:
             source_paths, target_dir = self.resolve_drop_context(mime_data, pos, source_widget)
         ark_reference = self.extract_ark_drop_reference(mime_data)
-        if not source_paths and ark_reference is None:
-            return False
-
-        if not QDir(target_dir).exists():
-            return False
-
-        if ark_reference is not None:
-            service, object_path = ark_reference
-            return self.extract_ark_drop_to_directory(service, object_path, target_dir)
-
-        if drop_action == Qt.DropAction.LinkAction:
-            return self.link_paths_to_directory(source_paths, target_dir)
-
-        if drop_action == Qt.DropAction.MoveAction:
-            return self.move_paths_to_directory(source_paths, target_dir)
-
-        return self.copy_paths_to_directory(source_paths, target_dir)
+        return self._drop_service.handle_tree_drop(
+            source_paths=source_paths,
+            target_dir=target_dir,
+            drop_action=drop_action,
+            ark_reference=ark_reference,
+            copy_callback=self.copy_paths_to_directory,
+            move_callback=self.move_paths_to_directory,
+            link_callback=self.link_paths_to_directory,
+            ark_callback=self.extract_ark_drop_to_directory,
+        )
 
     def on_tree_context_menu(self, pos):
         source_view = self.sender() if isinstance(self.sender(), QAbstractItemView) else self.active_item_view()
@@ -2725,7 +2476,7 @@ class PaneController(QObject):
             "}"
         )
 
-        if self.is_trash_context():
+        if self._delete_service.is_trash_context(self.current_directory):
             delete_icon = QIcon.fromTheme("edit-delete")
             if delete_icon.isNull():
                 delete_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)

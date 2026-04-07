@@ -15,6 +15,41 @@ class DeleteExecutionResult:
 
 
 class DeleteService:
+    def is_trash_context(self, current_directory: str) -> bool:
+        current_path = Path(QDir.cleanPath(current_directory)).expanduser()
+
+        local_trash_files = (Path.home() / ".local" / "share" / "Trash" / "files").resolve()
+        try:
+            resolved_current = current_path.resolve()
+            if resolved_current == local_trash_files or local_trash_files in resolved_current.parents:
+                return True
+        except OSError:
+            resolved_current = current_path
+
+        parts = resolved_current.parts
+        if len(parts) >= 2 and parts[-1] == "files":
+            parent_name = parts[-2]
+            if parent_name == "Trash" or parent_name.startswith(".Trash-"):
+                return True
+
+        return False
+
+    def is_temporary_context(self, current_directory: str) -> bool:
+        current_path = Path(QDir.cleanPath(current_directory)).expanduser()
+        tmp_roots = [Path("/tmp").resolve(), Path("/var/tmp").resolve()]
+        try:
+            resolved_current = current_path.resolve()
+        except OSError:
+            resolved_current = current_path
+
+        for root in tmp_roots:
+            if resolved_current == root or root in resolved_current.parents:
+                return True
+        return False
+
+    def resolve_permanent_default(self, current_directory: str) -> bool:
+        return self.is_trash_context(current_directory) or self.is_temporary_context(current_directory)
+
     def existing_paths(self, paths: list[str]) -> list[str]:
         existing: list[str] = []
         for target in paths:

@@ -12,6 +12,13 @@ Künftig soll der Controller:
 
 Er soll nicht mehr selbst die Details von Navigation, Dateioperationen, Remote-Zugriff, Drag'n'Drop oder Öffnen-Logik implementieren.
 
+## Status
+
+- Phase 1 abgeschlossen
+- Phase 2 abgeschlossen
+- Phase 3 abgeschlossen
+- Phase 4 offen
+
 ## Aktuelle Probleme
 
 Der aktuelle `PaneController` bündelt zu viele Verantwortlichkeiten:
@@ -115,6 +122,11 @@ Arbeitsschritte:
 Ergebnis:
 - Dateioperationen sind backend-fähig vorbereitet
 - Remote kann dieselben Use-Cases später implementieren
+
+Stand nach Abschluss:
+- `open`, `delete`, `batch rename`, `trash restore`, `archive`, `create`, `link`, `transfer`, `drop` und Ark-Drop sind in `src/services/file_actions/` ausgelagert
+- Lösch-Policy wie Papierkorb-/Temporär-Kontext liegt nicht mehr im Controller
+- `PaneController` behält in diesem Bereich nur noch UI-Orchestrierung, Feedback und View-Zustand
 
 ## Phase 4: Pane-Kontext generalisieren
 
