@@ -270,6 +270,7 @@ class PaneController(QObject):
             self._pin_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
 
         self.current_directory = QDir.homePath()
+        self.current_location = PaneLocation(kind="local", path=self.current_directory)
         self.filetree_view_mode = "details"
         self._pending_root_path = None
         self._pending_created_item_path = None
@@ -870,7 +871,10 @@ class PaneController(QObject):
         return icon
 
     def add_tab(self, title, path):
-        state = TabState(title=title, path=QDir.cleanPath(path))
+        location = self._resolve_local_location(path)
+        if location is None:
+            location = self._pane_state_service.make_location(QDir.cleanPath(path))
+        state = TabState(title=title, location=location)
         self.tab_states.append(state)
         index = self.tab_bar.addTab(title)
         self.update_tab_visual(index)
@@ -889,7 +893,9 @@ class PaneController(QObject):
             return
 
         tab_title = self._navigation_service.display_name_for_location(location)
-        self.add_tab(tab_title, location.path)
+        state = TabState(title=tab_title, location=location)
+        self.tab_states.append(state)
+        self.update_tab_visual(self.tab_bar.addTab(tab_title))
         if activate:
             self.tab_bar.setCurrentIndex(len(self.tab_states) - 1)
 
@@ -2280,8 +2286,13 @@ class PaneController(QObject):
                 suffix = state_path[len(old_path):]
                 updated_path = QDir.cleanPath(f"{new_path}{suffix}")
 
-                active_state.path = updated_path
+                active_state.location = PaneLocation(
+                    kind=active_state.location.kind,
+                    path=updated_path,
+                    remote_id=active_state.location.remote_id,
+                )
                 self.current_directory = updated_path
+                self.current_location = active_state.location
 
                 tab_title = Path(updated_path).name or updated_path
                 active_state.title = tab_title
@@ -2705,7 +2716,6 @@ class PaneController(QObject):
 
         for state in states:
             cloned_state = self._pane_state_service.clone_state(state)
-            cloned_state.path = QDir.cleanPath(cloned_state.path)
             self.tab_states.append(cloned_state)
             index = self.tab_bar.addTab(state.title)
             self.update_tab_visual(index)
@@ -2731,7 +2741,7 @@ class PaneController(QObject):
 
         clean_default = QDir.cleanPath(default_path)
         self.replace_tabs(
-            [TabState(title="Tab 1", path=clean_default, view_mode="details")],
+            [TabState(title="Tab 1", location=self._pane_state_service.make_location(clean_default), view_mode="details")],
             active_index=0,
         )
         return exported_states, exported_active_index
@@ -2788,7 +2798,10 @@ class PaneController(QObject):
         QDesktopServices.openUrl(QUrl.fromLocalFile(clean_path))
 
     def navigate_to(self, path, push_history=True):
-        location = self._resolve_local_location(path)
+        if isinstance(path, PaneLocation):
+            location = path if path.is_remote else self._resolve_local_location(path.path)
+        else:
+            location = self._resolve_local_location(path)
         if location is None:
             return
         target_path = location.path
@@ -2803,7 +2816,9 @@ class PaneController(QObject):
 
         if active_state.pinned and target_path != active_state.path:
             tab_title = self._navigation_service.display_name_for_location(location)
-            self.add_tab(tab_title, target_path)
+            new_state = TabState(title=tab_title, location=location)
+            self.tab_states.append(new_state)
+            self.update_tab_visual(self.tab_bar.addTab(tab_title))
 
             new_index = len(self.tab_states) - 1
             if new_index >= 0:
@@ -2812,8 +2827,8 @@ class PaneController(QObject):
                 new_state.icon_zoom_percent = active_state.icon_zoom_percent
                 new_state.history = self._history_service.record_navigation(
                     new_state.history,
-                    active_state.path,
-                    target_path,
+                    active_state.location,
+                    location,
                     push_history,
                 )
                 self.tab_bar.setCurrentIndex(new_index)
@@ -2821,13 +2836,14 @@ class PaneController(QObject):
 
         active_state.history = self._history_service.record_navigation(
             active_state.history,
-            active_state.path,
-            target_path,
+            active_state.location,
+            location,
             push_history,
         )
 
-        active_state.path = target_path
+        active_state.location = location
         self.current_directory = target_path
+        self.current_location = location
 
         tab_title = self._navigation_service.display_name_for_location(location)
         active_state.title = tab_title
@@ -2861,26 +2877,26 @@ class PaneController(QObject):
         self.navigate_to(previous_path, push_history=False)
 
     def navigate_up(self):
-        current_location = self._resolve_local_location(self.current_directory)
-        if current_location is None:
+        current_location = self.current_location
+        if current_location is None or current_location.is_remote:
             return
         parent_location = self._navigation_service.get_parent_location(current_location)
         if parent_location is None:
             return
-        self.navigate_to(parent_location.path)
+        self.navigate_to(parent_location)
 
     def can_go_back(self):
         active_state = self.get_active_tab_state()
         return bool(active_state and self._history_service.can_go_back(active_state.history))
 
     def can_go_up(self):
-        current_location = self._resolve_local_location(self.current_directory)
-        if current_location is None:
+        current_location = self.current_location
+        if current_location is None or current_location.is_remote:
             return False
         return self._navigation_service.get_parent_location(current_location) is not None
 
     def current_path(self):
-        return self.current_directory
+        return self.current_location.path
 
     def current_view_mode(self):
         return self.filetree_view_mode
