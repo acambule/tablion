@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+from PySide6.QtCore import QAbstractItemModel, QModelIndex, Qt
+from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel
+
+from localization import app_tr
+from domain.filesystem import PaneLocation
+
+
+@dataclass(frozen=True)
+class RemoteFileItem:
+    name: str
+    location: PaneLocation
+    is_dir: bool
+    size: int | None = None
+    modified_at: datetime | None = None
+    web_url: str = ""
+
+
+class RemoteFileTreeModel(QStandardItemModel):
+    ROLE_PATH = Qt.ItemDataRole.UserRole + 100
+    ROLE_IS_DIR = Qt.ItemDataRole.UserRole + 101
+    ROLE_WEB_URL = Qt.ItemDataRole.UserRole + 102
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._current_location = PaneLocation(kind="remote", path="/", remote_id=None)
+        self._update_headers()
+
+    def set_directory_entries(self, location: PaneLocation, entries: list[RemoteFileItem]) -> None:
+        self.clear()
+        self._current_location = location
+        self._update_headers()
+        for entry in entries:
+            row_items = self._build_row(entry)
+            self.appendRow(row_items)
+        self.sort(0, Qt.SortOrder.AscendingOrder)
+
+    def filePath(self, index: QModelIndex) -> str:
+        if not index.isValid():
+            return ""
+        return str(index.siblingAtColumn(0).data(self.ROLE_PATH) or "")
+
+    def isDir(self, index: QModelIndex) -> bool:
+        if not index.isValid():
+            return False
+        return bool(index.siblingAtColumn(0).data(self.ROLE_IS_DIR))
+
+    def fileUrl(self, index: QModelIndex) -> str:
+        if not index.isValid():
+            return ""
+        return str(index.siblingAtColumn(0).data(self.ROLE_WEB_URL) or "")
+
+    def currentLocation(self) -> PaneLocation:
+        return self._current_location
+
+    def _update_headers(self) -> None:
+        self.setHorizontalHeaderLabels(
+            [
+                app_tr("PaneController", "Name"),
+                app_tr("PaneController", "Größe"),
+                app_tr("PaneController", "Typ"),
+                app_tr("PaneController", "Geändert"),
+            ]
+        )
+
+    def _build_row(self, entry: RemoteFileItem) -> list[QStandardItem]:
+        name_item = QStandardItem(self._icon_for_entry(entry), entry.name)
+        name_item.setData(entry.location.path, self.ROLE_PATH)
+        name_item.setData(entry.is_dir, self.ROLE_IS_DIR)
+        name_item.setData(entry.web_url, self.ROLE_WEB_URL)
+        name_item.setEditable(False)
+
+        size_item = QStandardItem(self._size_text(entry))
+        size_item.setData(entry.location.path, self.ROLE_PATH)
+        size_item.setData(entry.is_dir, self.ROLE_IS_DIR)
+        size_item.setEditable(False)
+
+        type_item = QStandardItem(app_tr("PaneController", "Ordner") if entry.is_dir else (Path(entry.name).suffix.lstrip(".").upper() or app_tr("PaneController", "Datei")))
+        type_item.setData(entry.location.path, self.ROLE_PATH)
+        type_item.setData(entry.is_dir, self.ROLE_IS_DIR)
+        type_item.setEditable(False)
+
+        modified_item = QStandardItem(entry.modified_at.strftime("%d.%m.%y %H:%M") if entry.modified_at else "")
+        modified_item.setData(entry.location.path, self.ROLE_PATH)
+        modified_item.setData(entry.is_dir, self.ROLE_IS_DIR)
+        modified_item.setEditable(False)
+        return [name_item, size_item, type_item, modified_item]
+
+    def _icon_for_entry(self, entry: RemoteFileItem) -> QIcon:
+        if entry.is_dir:
+            return QIcon.fromTheme("folder-cloud") or QIcon.fromTheme("folder")
+        suffix = Path(entry.name).suffix.lower()
+        theme_name = {
+            ".pdf": "application-pdf",
+            ".png": "image-png",
+            ".jpg": "image-jpeg",
+            ".jpeg": "image-jpeg",
+            ".svg": "image-svg+xml",
+            ".txt": "text-plain",
+            ".md": "text-markdown",
+        }.get(suffix, "text-x-generic")
+        icon = QIcon.fromTheme(theme_name)
+        if icon.isNull():
+            icon = QIcon.fromTheme("text-x-generic")
+        return icon
+
+    def _size_text(self, entry: RemoteFileItem) -> str:
+        if entry.is_dir or entry.size is None:
+            return ""
+        size = float(entry.size)
+        for unit in ["Bytes", "KiB", "MiB", "GiB", "TiB"]:
+            if size < 1024.0 or unit == "TiB":
+                if unit == "Bytes":
+                    return f"{int(size)} {unit}"
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return ""

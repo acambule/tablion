@@ -8,6 +8,7 @@ from PySide6.QtGui import QColor, QIcon, QPen
 from PySide6.QtWidgets import QApplication, QAbstractItemView, QHeaderView, QStyle, QStyledItemDelegate, QTreeWidget, QTreeWidgetItem, QMenu, QInputDialog, QLineEdit
 
 from localization import app_tr
+from domain.filesystem import PaneLocation
 
 
 ROLE_PATH = Qt.ItemDataRole.UserRole
@@ -20,6 +21,8 @@ ROLE_ENTRY_TYPE = Qt.ItemDataRole.UserRole + 6
 ROLE_ENTRY_DYNAMIC = Qt.ItemDataRole.UserRole + 7
 ROLE_ENTRY_KEY = Qt.ItemDataRole.UserRole + 8
 ROLE_ENTRY_SOURCE = Qt.ItemDataRole.UserRole + 9
+ROLE_LOCATION_KIND = Qt.ItemDataRole.UserRole + 10
+ROLE_REMOTE_ID = Qt.ItemDataRole.UserRole + 11
 
 
 DEFAULT_NAVIGATOR_DATA = {
@@ -84,12 +87,15 @@ class NavigatorDropIndicatorDelegate(QStyledItemDelegate):
 
 
 class NavigatorManager(QObject):
-    entryMiddleClicked = Signal(str)
+    entryMiddleClicked = Signal(object)
+    remoteMountEditRequested = Signal(str)
 
-    def __init__(self, widget: QTreeWidget, data_path: Path):
+    def __init__(self, widget: QTreeWidget, data_path: Path, remote_mount_settings=None, remote_connection_settings=None):
         super().__init__(widget)
         self.widget = widget
         self.data_path = data_path
+        self.remote_mount_settings = remote_mount_settings
+        self.remote_connection_settings = remote_connection_settings
         self.loaded_data = {"groups": []}
         self.allowed_drop_groups = {"Places", "Cloud"}
         self._drop_indicator_item = None
@@ -152,9 +158,9 @@ class NavigatorManager(QObject):
             if watched == self.widget.viewport():
                 if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.MiddleButton:
                     item = self.widget.itemAt(event.position().toPoint())
-                    path = self.get_entry_path(item) if item is not None else None
-                    if path:
-                        self.entryMiddleClicked.emit(path)
+                    location = self.get_entry_location(item) if item is not None else None
+                    if location is not None:
+                        self.entryMiddleClicked.emit(location)
                         return True
 
                 if event.type() == QEvent.Type.DragEnter:
@@ -430,6 +436,10 @@ class NavigatorManager(QObject):
             else:
                 entries = group.get('entries', [])
 
+            if canonical_group_name == 'Cloud':
+                entries = list(entries) if isinstance(entries, list) else []
+                entries.extend(self._remote_entries())
+
             if canonical_group_name == 'Places' and isinstance(entries, list):
                 system_entries = []
                 custom_entries = []
@@ -492,6 +502,11 @@ class NavigatorManager(QObject):
                 entry_item.setData(0, ROLE_ENTRY_TYPE, 'entry')
                 entry_item.setData(0, ROLE_ENTRY_DYNAMIC, resolved_entry.get('dynamic', ''))
                 entry_item.setData(0, ROLE_ENTRY_SOURCE, resolved_entry.get('source', 'system'))
+                entry_item.setData(0, ROLE_LOCATION_KIND, resolved_entry.get('location_kind', 'local'))
+                entry_item.setData(0, ROLE_REMOTE_ID, resolved_entry.get('remote_id', ''))
+                tooltip = str(resolved_entry.get('tooltip') or '').strip()
+                if tooltip:
+                    entry_item.setToolTip(0, tooltip)
                 entry_flags = entry_item.flags()
                 entry_flags |= Qt.ItemFlag.ItemIsDragEnabled
                 entry_flags &= ~Qt.ItemFlag.ItemIsDropEnabled
@@ -526,9 +541,17 @@ class NavigatorManager(QObject):
 
     def resolve_icon(self, icon_name, fallback_standard_icon):
         if icon_name:
-            icon = QIcon.fromTheme(icon_name)
-            if not icon.isNull():
-                return icon
+            icon_text = str(icon_name).strip()
+            if icon_text:
+                icon_path = Path(icon_text).expanduser()
+                if icon_path.exists() and icon_path.is_file():
+                    icon = QIcon(str(icon_path))
+                    if not icon.isNull():
+                        return icon
+
+                icon = QIcon.fromTheme(icon_text)
+                if not icon.isNull():
+                    return icon
         return QApplication.style().standardIcon(fallback_standard_icon)
 
     def serialize(self):
@@ -571,6 +594,8 @@ class NavigatorManager(QObject):
                             "_entry_key": child.data(0, ROLE_ENTRY_KEY),
                         }
                         entry_source = child.data(0, ROLE_ENTRY_SOURCE) or 'system'
+                        if entry_source == 'remote':
+                            continue
                         if entry_source == 'custom':
                             entry_data["source"] = "custom"
 
@@ -634,6 +659,17 @@ class NavigatorManager(QObject):
                     self.rename_custom_entry(item)
                 if chosen == delete_action:
                     self.delete_custom_entry(item)
+                return
+            if source == 'remote':
+                edit_action = menu.addAction(
+                    self.resolve_icon('document-edit', QStyle.StandardPixmap.SP_FileDialogDetailedView),
+                    app_tr('NavigatorManager', 'Bearbeiten'),
+                )
+                chosen = menu.exec(self.widget.viewport().mapToGlobal(pos))
+                if chosen == edit_action:
+                    remote_id = str(item.data(0, ROLE_REMOTE_ID) or "").strip()
+                    if remote_id:
+                        self.remoteMountEditRequested.emit(remote_id)
                 return
 
             hide_action = menu.addAction(
@@ -859,6 +895,27 @@ class NavigatorManager(QObject):
             return None
         return path
 
+    def get_entry_location(self, item: QTreeWidgetItem):
+        if item is None or item.data(0, ROLE_KIND) != 'entry':
+            return None
+        path = item.data(0, ROLE_PATH)
+        if not path:
+            return None
+        kind = str(item.data(0, ROLE_LOCATION_KIND) or "local").strip().lower()
+        if kind not in {"local", "remote"}:
+            kind = "local"
+        remote_id = item.data(0, ROLE_REMOTE_ID)
+        return PaneLocation(
+            kind=kind,
+            path=str(path),
+            remote_id=str(remote_id) if remote_id else None,
+        )
+
+    def refresh(self):
+        self.widget.clear()
+        self.loaded_data = self.load_data()
+        self.build_from_data(self.loaded_data)
+
     def on_item_collapsed(self, item: QTreeWidgetItem):
         if item.data(0, ROLE_KIND) != 'group':
             return
@@ -866,6 +923,20 @@ class NavigatorManager(QObject):
             item.setExpanded(True)
 
     def resolve_entry_data(self, entry):
+        if str(entry.get("source", "system")).strip() == "remote":
+            remote_path = str(entry.get("path") or "/").strip() or "/"
+            if not remote_path.startswith("/"):
+                remote_path = f"/{remote_path}"
+            return {
+                "label": entry.get("label", ""),
+                "path": remote_path,
+                "icon": entry.get("icon", "folder-cloud"),
+                "source": "remote",
+                "location_kind": "remote",
+                "remote_id": str(entry.get("remote_id") or "").strip(),
+                "dynamic": "",
+            }
+
         dynamic_token = entry.get('dynamic', '')
         if not dynamic_token:
             return entry
@@ -897,6 +968,16 @@ class NavigatorManager(QObject):
             dynamic_entry['icon'] = dynamic_entry['icon'] or 'folder-download'
         else:
             return entry
+
+    def _remote_entries(self):
+        if self.remote_mount_settings is None:
+            return []
+        if not hasattr(self.remote_mount_settings, "build_navigator_entries"):
+            return []
+        try:
+            return list(self.remote_mount_settings.build_navigator_entries(self.remote_connection_settings))
+        except Exception:
+            return []
 
         return dynamic_entry
 

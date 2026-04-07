@@ -15,11 +15,14 @@ from PySide6.QtUiTools import QUiLoader
 from PySide6.QtCore import QDir, QEvent, Qt, QTimer, QStandardPaths, QUrl
 
 from controllers.group_controller import GroupController
+from controllers.remote_drive_controller import RemoteDriveController
 from debug_log import debug_exception, debug_log, initialize_debug_log
 from localization import app_tr, ask_yes_no, apply_localization, setup_localization
 from models.editor_settings import EditorSettings
 from models.file_system_model import FileSystemModel
 from models.navigator import DEFAULT_NAVIGATOR_DATA, NavigatorManager
+from models.remote_connection_settings import RemoteConnectionSettings
+from models.remote_mount_settings import RemoteMountSettings
 from widgets.settings_dialog import SettingsDialog
 from single_application import SingleApplication
 from widgets.group_workspace_widget import GroupWorkspaceWidget
@@ -37,9 +40,18 @@ class MainWindow(QMainWindow):
         self.session_data_path = Path()
         self.debug_log_path = Path()
         self.editor_settings_path = Path()
+        self.remote_connections_path = Path()
+        self.remote_mounts_path = Path()
+        self.legacy_remote_drives_path = Path()
         self.editor_settings = None
+        self.remote_connection_settings = None
+        self.remote_mount_settings = None
+        self.remote_drive_controller = None
         self.initialize_storage_paths()
         self.editor_settings = EditorSettings(self.editor_settings_path)
+        self.remote_connection_settings = RemoteConnectionSettings(self.remote_connections_path, self.legacy_remote_drives_path)
+        self.remote_mount_settings = RemoteMountSettings(self.remote_mounts_path, self.legacy_remote_drives_path)
+        self.remote_drive_controller = RemoteDriveController(self.remote_connection_settings, self.remote_mount_settings)
         initialize_debug_log(self.debug_log_path)
         debug_log("MainWindow.__init__ started")
         debug_log(f"Debug log path: {self.debug_log_path}")
@@ -115,6 +127,9 @@ class MainWindow(QMainWindow):
         self.session_data_path = state_dir / 'session.json'
         self.debug_log_path = state_dir / 'debug.log'
         self.editor_settings_path = config_dir / 'editor_settings.json'
+        self.remote_connections_path = config_dir / 'remote_connections.json'
+        self.remote_mounts_path = config_dir / 'remote_mounts.json'
+        self.legacy_remote_drives_path = config_dir / 'remote_drives.json'
 
         self.migrate_legacy_json_if_needed()
 
@@ -170,6 +185,7 @@ class MainWindow(QMainWindow):
             update_nav_buttons=self.update_nav_buttons,
             plain_tabbing_mode=self.plain_tabbing_mode,
             editor_settings=self.editor_settings,
+            remote_drive_controller=self.remote_drive_controller,
         )
         self.group_controller.initialize_existing_groups()
 
@@ -952,10 +968,16 @@ class MainWindow(QMainWindow):
         if not navigator_widget:
             return
 
-        self.navigator_manager = NavigatorManager(navigator_widget, self.navigator_data_path)
+        self.navigator_manager = NavigatorManager(
+            navigator_widget,
+            self.navigator_data_path,
+            remote_mount_settings=self.remote_mount_settings,
+            remote_connection_settings=self.remote_connection_settings,
+        )
         self.navigator_manager.setup()
         navigator_widget.itemClicked.connect(self.on_nav_click)
         self.navigator_manager.entryMiddleClicked.connect(self.on_nav_middle_click)
+        self.navigator_manager.remoteMountEditRequested.connect(self.on_navigator_remote_mount_edit_requested)
 
     def setup_shortcuts(self):
         self.action_refresh_tree = QAction(self.ui)
@@ -974,23 +996,30 @@ class MainWindow(QMainWindow):
         if not self.navigator_manager:
             return
 
-        path = self.navigator_manager.get_entry_path(item)
-        if not path:
+        location = self.navigator_manager.get_entry_location(item)
+        if location is None:
             return
 
         active_pane = self.get_active_pane()
         if active_pane:
-            active_pane.navigate_to(path)
+            active_pane.navigate_to(location)
 
-    def on_nav_middle_click(self, path):
-        if not path:
+    def on_nav_middle_click(self, location):
+        if location is None:
             return
 
         active_pane = self.get_active_pane()
         if active_pane and hasattr(active_pane, "open_path_in_new_tab"):
             behavior = str(getattr(self.editor_settings, "middle_click_new_tab_behavior", "background") or "background").strip().lower()
             activate = behavior == "foreground"
-            active_pane.open_path_in_new_tab(path, activate=activate)
+            active_pane.open_path_in_new_tab(location, activate=activate)
+
+    def on_navigator_remote_mount_edit_requested(self, remote_mount_id: str):
+        self.show_settings_dialog(remote_mount_id=remote_mount_id)
+
+    def refresh_navigator(self):
+        if self.navigator_manager is not None:
+            self.navigator_manager.refresh()
 
     def navigate_back(self):
         active_pane = self.get_active_pane()
@@ -1117,18 +1146,26 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    def show_settings_dialog(self):
+    def show_settings_dialog(self, remote_mount_id: str | None = None):
         if self.editor_settings is None:
             return
         try:
             if self._settings_dialog is not None and self._settings_dialog.isVisible():
+                if remote_mount_id:
+                    self._settings_dialog.focus_remote_mount(remote_mount_id)
                 self._settings_dialog.raise_()
                 self._settings_dialog.activateWindow()
                 return
 
             parent_widget = self.ui if isinstance(self.ui, QWidget) else self
-            self._settings_dialog = SettingsDialog(parent_widget, self.editor_settings)
+            self._settings_dialog = SettingsDialog(
+                parent_widget,
+                self.editor_settings,
+                self.remote_connection_settings,
+                self.remote_mount_settings,
+            )
             self._settings_dialog.settingsChanged.connect(self.apply_tab_close_icon_settings)
+            self._settings_dialog.settingsChanged.connect(self.refresh_navigator)
             self._settings_dialog.languagePreferenceChanged.connect(self.on_language_preference_changed)
             self._settings_dialog.sessionExportRequested.connect(self.on_session_export_requested)
             self._settings_dialog.sessionImportRequested.connect(self.on_session_import_requested)
@@ -1139,6 +1176,8 @@ class MainWindow(QMainWindow):
             self._settings_dialog.setWindowModality(Qt.WindowModality.NonModal)
             self._settings_dialog.adjustSize()
             self._settings_dialog.show()
+            if remote_mount_id:
+                self._settings_dialog.focus_remote_mount(remote_mount_id)
             self._settings_dialog.raise_()
             self._settings_dialog.activateWindow()
         except Exception as error:

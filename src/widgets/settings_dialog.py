@@ -1,25 +1,39 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QSize
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSize, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
     QLineEdit,
-    QStackedWidget,
     QListWidget,
+    QListWidgetItem,
+    QMessageBox,
     QPushButton,
+    QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from models.editor_settings import EditorSettings
 from localization import app_tr
+from models.editor_settings import EditorSettings
+from models.remote_connection_settings import RemoteConnectionDefinition, RemoteConnectionSettings
+from models.remote_mount_settings import RemoteMountDefinition, RemoteMountSettings
+from remotes.providers.onedrive_auth import OneDriveAuthError, OneDriveAuthService
+from widgets.icon_picker_dialog import IconPickerDialog
 
 
 class SettingsDialog(QDialog):
@@ -29,9 +43,21 @@ class SettingsDialog(QDialog):
     sessionImportRequested = Signal()
     factoryResetRequested = Signal()
 
-    def __init__(self, parent: QWidget | None, editor_settings: EditorSettings):
+    def __init__(
+        self,
+        parent: QWidget | None,
+        editor_settings: EditorSettings,
+        remote_connection_settings: RemoteConnectionSettings | None = None,
+        remote_mount_settings: RemoteMountSettings | None = None,
+    ):
         super().__init__(parent)
         self._editor_settings = editor_settings
+        self._remote_connection_settings = remote_connection_settings
+        self._remote_mount_settings = remote_mount_settings
+        self._one_drive_auth_service = OneDriveAuthService()
+        self._connection_rows: list[dict] = []
+        self._mount_rows: list[dict] = []
+
         loader = QUiLoader()
         ui_path = Path(__file__).resolve().parent.parent / "ui" / "settings.ui"
         self.ui = loader.load(str(ui_path), self)
@@ -63,8 +89,35 @@ class SettingsDialog(QDialog):
         self._import_session_button = self.ui.findChild(QPushButton, "importSessionButton")
         self._reset_workspace_button = self.ui.findChild(QPushButton, "resetWorkspaceButton")
 
+        self._connection_provider_combo = None
+        self._connection_display_name_line_edit = None
+        self._connection_tenant_line_edit = None
+        self._connection_client_id_line_edit = None
+        self._connection_status_label = None
+        self._connection_table = None
+
+        self._mount_connection_combo = None
+        self._mount_display_name_line_edit = None
+        self._mount_scope_combo = None
+        self._mount_root_path_line_edit = None
+        self._mount_icon_name_line_edit = None
+        self._mount_icon_browse_button = None
+        self._mount_table = None
+        self._mount_status_label = None
+        self._remote_clouds_page = None
+        self._remote_clouds_tabs = None
+
         if self._categories_list and self._category_stack:
             self._categories_list.currentRowChanged.connect(self._category_stack.setCurrentIndex)
+
+        self._setup_remote_clouds_page()
+        self._load_connection_rows()
+        self._load_mount_rows()
+        self._rebuild_connection_table()
+        self._rebuild_mount_table()
+        self._rebuild_mount_connection_combo()
+
+        if self._categories_list and self._category_stack:
             self._categories_list.setCurrentRow(0)
 
         if self._default_editor_line_edit:
@@ -73,8 +126,7 @@ class SettingsDialog(QDialog):
                 self._default_editor_line_edit.setText(stored)
 
         if self._app_double_click_behavior_combo:
-            behavior = self._editor_settings.application_double_click_behavior
-            self._app_double_click_behavior_combo.setCurrentIndex(1 if behavior == "edit" else 0)
+            self._app_double_click_behavior_combo.setCurrentIndex(1 if self._editor_settings.application_double_click_behavior == "edit" else 0)
 
         if self._language_preference_combo:
             language_map = {"system": 0, "de": 1, "en": 2}
@@ -82,9 +134,7 @@ class SettingsDialog(QDialog):
 
         if self._group_creation_behavior_combo:
             behavior_map = {"default_tab": 0, "copy_tabs": 1}
-            self._group_creation_behavior_combo.setCurrentIndex(
-                behavior_map.get(self._editor_settings.group_creation_behavior, 0)
-            )
+            self._group_creation_behavior_combo.setCurrentIndex(behavior_map.get(self._editor_settings.group_creation_behavior, 0))
 
         if self._middle_click_tab_behavior_combo:
             behavior_map = {"background": 0, "foreground": 1}
@@ -119,9 +169,507 @@ class SettingsDialog(QDialog):
         if self._reset_workspace_button:
             self._reset_workspace_button.clicked.connect(self.factoryResetRequested.emit)
 
+    def _setup_remote_clouds_page(self) -> None:
+        if self._categories_list is None or self._category_stack is None:
+            return
+
+        page = QWidget(self)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        tabs = QTabWidget(page)
+        self._remote_clouds_page = page
+        self._remote_clouds_tabs = tabs
+        tabs.addTab(self._build_connections_tab(), app_tr("SettingsDialog", "Verbindungen"))
+        tabs.addTab(self._build_mounts_tab(), app_tr("SettingsDialog", "Einträge"))
+        layout.addWidget(tabs)
+
+        self._category_stack.addWidget(page)
+        remote_item = QListWidgetItem(app_tr("SettingsDialog", "Remote-Clouds"))
+        remote_item.setIcon(QIcon.fromTheme("folder-cloud"))
+        self._categories_list.addItem(remote_item)
+
+    def _build_connections_tab(self) -> QWidget:
+        page = QWidget(self)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        form_widget = QWidget(page)
+        form_layout = QFormLayout(form_widget)
+        form_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._connection_provider_combo = QComboBox(form_widget)
+        self._connection_provider_combo.addItems(["OneDrive", "Dropbox", "Google Drive"])
+        form_layout.addRow(app_tr("SettingsDialog", "Anbieter"), self._connection_provider_combo)
+
+        self._connection_display_name_line_edit = QLineEdit(form_widget)
+        form_layout.addRow(app_tr("SettingsDialog", "Name"), self._connection_display_name_line_edit)
+
+        self._connection_tenant_line_edit = QLineEdit(form_widget)
+        self._connection_tenant_line_edit.setText("common")
+        form_layout.addRow(app_tr("SettingsDialog", "Tenant-ID"), self._connection_tenant_line_edit)
+
+        self._connection_client_id_line_edit = QLineEdit(form_widget)
+        form_layout.addRow(app_tr("SettingsDialog", "Client-ID"), self._connection_client_id_line_edit)
+        layout.addWidget(form_widget)
+
+        button_row = QHBoxLayout()
+        connect_button = QPushButton(app_tr("SettingsDialog", "Mit OneDrive verbinden"), page)
+        remove_button = QPushButton(app_tr("SettingsDialog", "Verbindung entfernen"), page)
+        button_row.addWidget(connect_button)
+        button_row.addWidget(remove_button)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
+
+        self._connection_status_label = QLabel(page)
+        self._connection_status_label.setWordWrap(True)
+        self._connection_status_label.setText(
+            app_tr(
+                "SettingsDialog",
+                "Verbindungen enthalten Authentifizierung und Kontodaten. Einträge im Navigator werden erst aus Einträgen erzeugt.",
+            )
+        )
+        layout.addWidget(self._connection_status_label)
+
+        self._connection_table = QTableWidget(page)
+        self._connection_table.setColumnCount(5)
+        self._connection_table.setHorizontalHeaderLabels(
+            [
+                app_tr("SettingsDialog", "Anbieter"),
+                app_tr("SettingsDialog", "Name"),
+                app_tr("SettingsDialog", "Konto"),
+                app_tr("SettingsDialog", "Tenant"),
+                app_tr("SettingsDialog", "Status"),
+            ]
+        )
+        self._connection_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._connection_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._connection_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._connection_table.verticalHeader().setVisible(False)
+        layout.addWidget(self._connection_table, 1)
+
+        connect_button.clicked.connect(self._connect_new_account)
+        remove_button.clicked.connect(self._remove_selected_connection)
+        return page
+
+    def _build_mounts_tab(self) -> QWidget:
+        page = QWidget(self)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        form_widget = QWidget(page)
+        form_layout = QFormLayout(form_widget)
+        form_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._mount_connection_combo = QComboBox(form_widget)
+        form_layout.addRow(app_tr("SettingsDialog", "Verbindung"), self._mount_connection_combo)
+
+        self._mount_display_name_line_edit = QLineEdit(form_widget)
+        form_layout.addRow(app_tr("SettingsDialog", "Name"), self._mount_display_name_line_edit)
+
+        self._mount_scope_combo = QComboBox(form_widget)
+        self._mount_scope_combo.addItems(
+            [
+                app_tr("SettingsDialog", "Persönlich"),
+                app_tr("SettingsDialog", "SharePoint"),
+                app_tr("SettingsDialog", "Team"),
+            ]
+        )
+        form_layout.addRow(app_tr("SettingsDialog", "Bereich"), self._mount_scope_combo)
+
+        self._mount_root_path_line_edit = QLineEdit(form_widget)
+        self._mount_root_path_line_edit.setPlaceholderText("/")
+        form_layout.addRow(app_tr("SettingsDialog", "Root-Pfad"), self._mount_root_path_line_edit)
+
+        icon_row = QWidget(form_widget)
+        icon_row_layout = QHBoxLayout(icon_row)
+        icon_row_layout.setContentsMargins(0, 0, 0, 0)
+        icon_row_layout.setSpacing(6)
+        self._mount_icon_name_line_edit = QLineEdit(icon_row)
+        self._mount_icon_name_line_edit.setPlaceholderText("folder-cloud")
+        self._mount_icon_browse_button = QPushButton(app_tr("SettingsDialog", "Auswählen…"), icon_row)
+        icon_row_layout.addWidget(self._mount_icon_name_line_edit, 1)
+        icon_row_layout.addWidget(self._mount_icon_browse_button)
+        form_layout.addRow(app_tr("SettingsDialog", "Icon"), icon_row)
+        layout.addWidget(form_widget)
+
+        button_row = QHBoxLayout()
+        add_button = QPushButton(app_tr("SettingsDialog", "Eintrag hinzufügen"), page)
+        remove_button = QPushButton(app_tr("SettingsDialog", "Eintrag entfernen"), page)
+        button_row.addWidget(add_button)
+        button_row.addWidget(remove_button)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
+
+        self._mount_status_label = QLabel(page)
+        self._mount_status_label.setWordWrap(True)
+        self._mount_status_label.setText(
+            app_tr(
+                "SettingsDialog",
+                "Einträge bestimmen, was unter Cloud in Tablion sichtbar wird. Mehrere Einträge können dieselbe Verbindung verwenden.",
+            )
+        )
+        layout.addWidget(self._mount_status_label)
+
+        self._mount_table = QTableWidget(page)
+        self._mount_table.setColumnCount(5)
+        self._mount_table.setHorizontalHeaderLabels(
+            [
+                app_tr("SettingsDialog", "Verbindung"),
+                app_tr("SettingsDialog", "Name"),
+                app_tr("SettingsDialog", "Bereich"),
+                app_tr("SettingsDialog", "Root"),
+                app_tr("SettingsDialog", "Status"),
+            ]
+        )
+        self._mount_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._mount_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._mount_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._mount_table.verticalHeader().setVisible(False)
+        layout.addWidget(self._mount_table, 1)
+
+        add_button.clicked.connect(self._add_mount)
+        remove_button.clicked.connect(self._remove_selected_mount)
+        self._mount_connection_combo.currentIndexChanged.connect(lambda _=0: self._apply_mount_icon_suggestion())
+        self._mount_scope_combo.currentIndexChanged.connect(lambda _=0: self._apply_mount_icon_suggestion())
+        self._mount_connection_combo.currentIndexChanged.connect(lambda _=0: self._sync_selected_mount_from_form())
+        self._mount_display_name_line_edit.textChanged.connect(lambda _="": self._sync_selected_mount_from_form())
+        self._mount_scope_combo.currentIndexChanged.connect(lambda _=0: self._sync_selected_mount_from_form())
+        self._mount_root_path_line_edit.textChanged.connect(lambda _="": self._sync_selected_mount_from_form())
+        self._mount_icon_name_line_edit.textChanged.connect(lambda _="": self._sync_selected_mount_from_form())
+        self._mount_table.itemSelectionChanged.connect(self._load_selected_mount_into_form)
+        self._mount_icon_browse_button.clicked.connect(self._pick_mount_icon)
+        return page
+
+    def _load_connection_rows(self) -> None:
+        self._connection_rows = []
+        if self._remote_connection_settings is None:
+            return
+        for item in self._remote_connection_settings.connections:
+            self._connection_rows.append(asdict_like(item))
+
+    def _load_mount_rows(self) -> None:
+        self._mount_rows = []
+        if self._remote_mount_settings is None:
+            return
+        for item in self._remote_mount_settings.mounts:
+            self._mount_rows.append(asdict_like(item))
+
+    def _rebuild_connection_table(self) -> None:
+        if self._connection_table is None:
+            return
+        self._connection_table.setRowCount(len(self._connection_rows))
+        for row, item in enumerate(self._connection_rows):
+            values = [
+                self._provider_label(item.get("provider")),
+                str(item.get("display_name") or ""),
+                str(item.get("account_label") or ""),
+                str(item.get("tenant_id") or ""),
+                app_tr("SettingsDialog", "Verbunden") if item.get("refresh_token") else app_tr("SettingsDialog", "Unvollständig"),
+            ]
+            for column, value in enumerate(values):
+                self._connection_table.setItem(row, column, QTableWidgetItem(value))
+        self._connection_table.resizeColumnsToContents()
+
+    def _rebuild_mount_table(self) -> None:
+        if self._mount_table is None:
+            return
+        self._mount_table.setRowCount(len(self._mount_rows))
+        for row, item in enumerate(self._mount_rows):
+            values = [
+                self._connection_label(item.get("connection_id")),
+                str(item.get("display_name") or ""),
+                self._scope_label(item.get("scope")),
+                str(item.get("root_path") or "/"),
+                app_tr("SettingsDialog", "Aktiv") if item.get("enabled", True) else app_tr("SettingsDialog", "Deaktiviert"),
+            ]
+            for column, value in enumerate(values):
+                self._mount_table.setItem(row, column, QTableWidgetItem(value))
+        self._mount_table.resizeColumnsToContents()
+
+    def _rebuild_mount_connection_combo(self) -> None:
+        if self._mount_connection_combo is None:
+            return
+        self._mount_connection_combo.clear()
+        for item in self._connection_rows:
+            label = str(item.get("display_name") or "")
+            account = str(item.get("account_label") or "")
+            if account:
+                label = f"{label} - {account}"
+            self._mount_connection_combo.addItem(label, item.get("id"))
+        self._apply_mount_icon_suggestion()
+
+    def _provider_label(self, provider: str) -> str:
+        mapping = {"onedrive": "OneDrive", "dropbox": "Dropbox", "gdrive": "Google Drive"}
+        return mapping.get(str(provider or "").strip().lower(), "OneDrive")
+
+    def _scope_label(self, scope: str) -> str:
+        mapping = {
+            "personal": app_tr("SettingsDialog", "Persönlich"),
+            "sharepoint": app_tr("SettingsDialog", "SharePoint"),
+            "team": app_tr("SettingsDialog", "Team"),
+        }
+        return mapping.get(str(scope or "").strip().lower(), app_tr("SettingsDialog", "Persönlich"))
+
+    def _connection_label(self, connection_id: str) -> str:
+        key = str(connection_id or "").strip()
+        for item in self._connection_rows:
+            if item.get("id") == key:
+                label = str(item.get("display_name") or "")
+                account = str(item.get("account_label") or "")
+                return f"{label} - {account}" if account else label
+        return key
+
+    def _suggest_icon_name(self, provider: str, scope: str) -> str:
+        provider_key = str(provider or "").strip().lower()
+        scope_key = str(scope or "").strip().lower()
+        if provider_key == "onedrive":
+            if scope_key == "sharepoint":
+                return "folder-publicshare"
+            if scope_key == "team":
+                return "folder-sync"
+            return "folder-cloud"
+        return "folder-cloud"
+
+    def _apply_mount_icon_suggestion(self) -> None:
+        if self._mount_icon_name_line_edit is None:
+            return
+        if self._mount_icon_name_line_edit.text().strip():
+            return
+        connection_id = str(self._mount_connection_combo.currentData() or "").strip() if self._mount_connection_combo else ""
+        provider = "onedrive"
+        for item in self._connection_rows:
+            if item.get("id") == connection_id:
+                provider = str(item.get("provider") or "onedrive")
+                break
+        scope_index = self._mount_scope_combo.currentIndex() if self._mount_scope_combo else 0
+        scope = ["personal", "sharepoint", "team"][max(0, min(scope_index, 2))]
+        self._mount_icon_name_line_edit.setPlaceholderText(self._suggest_icon_name(provider, scope))
+
+    def _pick_mount_icon(self) -> None:
+        if self._mount_icon_name_line_edit is None:
+            return
+        current_value = self._mount_icon_name_line_edit.text().strip() or self._mount_icon_name_line_edit.placeholderText().strip()
+        dialog = IconPickerDialog(self, current_value)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._mount_icon_name_line_edit.setText(dialog.icon_value())
+        self._sync_selected_mount_from_form()
+
+    def _load_selected_mount_into_form(self) -> None:
+        if self._mount_table is None or self._mount_connection_combo is None or self._mount_display_name_line_edit is None:
+            return
+        row = self._mount_table.currentRow()
+        if row < 0 or row >= len(self._mount_rows):
+            return
+        item = self._mount_rows[row]
+        connection_index = self._mount_connection_combo.findData(item.get("connection_id"))
+        if connection_index >= 0:
+            self._mount_connection_combo.setCurrentIndex(connection_index)
+        self._mount_display_name_line_edit.setText(str(item.get("display_name") or ""))
+        scope = str(item.get("scope") or "personal").strip().lower()
+        scope_index = {"personal": 0, "sharepoint": 1, "team": 2}.get(scope, 0)
+        if self._mount_scope_combo is not None:
+            self._mount_scope_combo.setCurrentIndex(scope_index)
+        if self._mount_root_path_line_edit is not None:
+            self._mount_root_path_line_edit.setText(str(item.get("root_path") or "/"))
+        if self._mount_icon_name_line_edit is not None:
+            self._mount_icon_name_line_edit.setText(str(item.get("icon_name") or ""))
+            self._apply_mount_icon_suggestion()
+
+    def _sync_selected_mount_from_form(self) -> None:
+        if (
+            self._mount_table is None
+            or self._mount_connection_combo is None
+            or self._mount_display_name_line_edit is None
+            or self._mount_scope_combo is None
+            or self._mount_root_path_line_edit is None
+            or self._mount_icon_name_line_edit is None
+        ):
+            return
+        row = self._mount_table.currentRow()
+        if row < 0 or row >= len(self._mount_rows):
+            return
+
+        connection_id = str(self._mount_connection_combo.currentData() or "").strip()
+        if not connection_id:
+            return
+
+        connection = None
+        for item in self._connection_rows:
+            if str(item.get("id") or "") == connection_id:
+                connection = item
+                break
+        if connection is None:
+            return
+
+        scope = ["personal", "sharepoint", "team"][max(0, min(self._mount_scope_combo.currentIndex(), 2))]
+        root_path = self._mount_root_path_line_edit.text().strip() or "/"
+        icon_name = self._mount_icon_name_line_edit.text().strip() or self._suggest_icon_name(connection.get("provider", "onedrive"), scope)
+
+        self._mount_rows[row] = {
+            **self._mount_rows[row],
+            "connection_id": connection_id,
+            "provider": connection.get("provider", "onedrive"),
+            "display_name": self._mount_display_name_line_edit.text().strip(),
+            "icon_name": icon_name,
+            "scope": scope,
+            "drive_id": connection.get("drive_id", ""),
+            "root_path": root_path,
+        }
+        self._rebuild_mount_table()
+        self._mount_table.selectRow(row)
+
+    def _connect_new_account(self) -> None:
+        if self._connection_display_name_line_edit is None:
+            return
+        display_name = self._connection_display_name_line_edit.text().strip()
+        if not display_name:
+            return
+
+        provider_index = self._connection_provider_combo.currentIndex() if self._connection_provider_combo else 0
+        provider = ["onedrive", "dropbox", "gdrive"][max(0, min(provider_index, 2))]
+        if provider != "onedrive":
+            QMessageBox.information(
+                self,
+                app_tr("SettingsDialog", "Remote-Clouds"),
+                app_tr("SettingsDialog", "Aktuell ist nur OneDrive-Authentifizierung implementiert."),
+            )
+            return
+
+        tenant_id = self._connection_tenant_line_edit.text().strip() if self._connection_tenant_line_edit else "common"
+        client_id = self._connection_client_id_line_edit.text().strip() if self._connection_client_id_line_edit else ""
+        if not client_id:
+            QMessageBox.warning(
+                self,
+                app_tr("SettingsDialog", "Remote-Clouds"),
+                app_tr("SettingsDialog", "Für OneDrive ist eine Client-ID erforderlich."),
+            )
+            return
+
+        try:
+            auth_result = self._one_drive_auth_service.authenticate(
+                client_id=client_id,
+                tenant_id=tenant_id or "common",
+                device_prompt_callback=self._show_onedrive_device_prompt,
+            )
+        except OneDriveAuthError as error:
+            QMessageBox.warning(
+                self,
+                app_tr("SettingsDialog", "OneDrive-Anmeldung fehlgeschlagen"),
+                str(error),
+            )
+            return
+
+        self._connection_rows.append(
+            {
+                "id": f"conn-{uuid.uuid4().hex}",
+                "provider": provider,
+                "display_name": display_name,
+                "tenant_id": tenant_id or "common",
+                "client_id": client_id,
+                "account_label": auth_result.account_label,
+                "drive_id": auth_result.drive_id,
+                "access_token": auth_result.access_token,
+                "refresh_token": auth_result.refresh_token,
+                "access_token_expires_at": auth_result.expires_at,
+                "enabled": True,
+            }
+        )
+        self._rebuild_connection_table()
+        self._rebuild_mount_connection_combo()
+        self._apply_mount_icon_suggestion()
+        self._connection_display_name_line_edit.clear()
+        if self._connection_client_id_line_edit:
+            self._connection_client_id_line_edit.clear()
+
+    def _add_mount(self) -> None:
+        if self._mount_connection_combo is None or self._mount_display_name_line_edit is None:
+            return
+        connection_id = str(self._mount_connection_combo.currentData() or "").strip()
+        display_name = self._mount_display_name_line_edit.text().strip()
+        if not connection_id or not display_name:
+            return
+
+        connection = None
+        for item in self._connection_rows:
+            if item.get("id") == connection_id:
+                connection = item
+                break
+        if connection is None:
+            return
+
+        scope_index = self._mount_scope_combo.currentIndex() if self._mount_scope_combo else 0
+        scope = ["personal", "sharepoint", "team"][max(0, min(scope_index, 2))]
+        root_path = (self._mount_root_path_line_edit.text().strip() if self._mount_root_path_line_edit else "") or "/"
+
+        self._mount_rows.append(
+            {
+                "connection_id": connection_id,
+                "provider": connection.get("provider", "onedrive"),
+                "display_name": display_name,
+                "icon_name": (
+                    self._mount_icon_name_line_edit.text().strip()
+                    if self._mount_icon_name_line_edit and self._mount_icon_name_line_edit.text().strip()
+                    else self._suggest_icon_name(connection.get("provider", "onedrive"), scope)
+                ),
+                "scope": scope,
+                "drive_id": connection.get("drive_id", ""),
+                "root_path": root_path,
+                "enabled": True,
+            }
+        )
+        self._rebuild_mount_table()
+        if self._mount_table is not None and self._mount_rows:
+            self._mount_table.selectRow(len(self._mount_rows) - 1)
+        self._mount_display_name_line_edit.clear()
+        if self._mount_root_path_line_edit:
+            self._mount_root_path_line_edit.clear()
+        if self._mount_icon_name_line_edit:
+            self._mount_icon_name_line_edit.clear()
+            self._apply_mount_icon_suggestion()
+
+    def _show_onedrive_device_prompt(self, *, message: str, user_code: str, verification_uri: str, prompt_url: str) -> None:
+        detail_lines = []
+        if message:
+            detail_lines.append(message)
+        else:
+            detail_lines.append(app_tr("SettingsDialog", "Bitte öffne die Microsoft-Seite und gib dort den folgenden Code ein:"))
+            detail_lines.append(user_code)
+        if prompt_url:
+            detail_lines.extend(["", app_tr("SettingsDialog", "Geöffnete URL:"), prompt_url])
+        if verification_uri and verification_uri != prompt_url:
+            detail_lines.extend(["", app_tr("SettingsDialog", "Fallback-URL:"), verification_uri])
+        QMessageBox.information(self, app_tr("SettingsDialog", "OneDrive-Anmeldung"), "\n".join(detail_lines))
+
+    def _remove_selected_connection(self) -> None:
+        if self._connection_table is None:
+            return
+        row = self._connection_table.currentRow()
+        if row < 0 or row >= len(self._connection_rows):
+            return
+        connection_id = str(self._connection_rows[row].get("id") or "")
+        del self._connection_rows[row]
+        self._mount_rows = [item for item in self._mount_rows if str(item.get("connection_id") or "") != connection_id]
+        self._rebuild_connection_table()
+        self._rebuild_mount_connection_combo()
+        self._rebuild_mount_table()
+
+    def _remove_selected_mount(self) -> None:
+        if self._mount_table is None:
+            return
+        row = self._mount_table.currentRow()
+        if row < 0 or row >= len(self._mount_rows):
+            return
+        del self._mount_rows[row]
+        self._rebuild_mount_table()
+
     def _on_apply(self) -> None:
         old_language = self._editor_settings.language_preference
-        self._save_editor_preference()
+        self._save_preferences()
         self.settingsChanged.emit()
         new_language = self._editor_settings.language_preference
         if new_language != old_language:
@@ -129,14 +677,14 @@ class SettingsDialog(QDialog):
 
     def _on_accepted(self) -> None:
         old_language = self._editor_settings.language_preference
-        self._save_editor_preference()
+        self._save_preferences()
         self.settingsChanged.emit()
         new_language = self._editor_settings.language_preference
         if new_language != old_language:
             self.languagePreferenceChanged.emit(new_language)
         self.accept()
 
-    def _save_editor_preference(self) -> None:
+    def _save_preferences(self) -> None:
         if self._default_editor_line_edit:
             value = self._default_editor_line_edit.text().strip()
             self._editor_settings.update_tablion_editor(value if value else None)
@@ -157,3 +705,34 @@ class SettingsDialog(QDialog):
             self._editor_settings.update_show_group_tab_close_icons(self._show_group_tab_close_icons_checkbox.isChecked())
         if self._show_file_tab_close_icons_checkbox:
             self._editor_settings.update_show_file_tab_close_icons(self._show_file_tab_close_icons_checkbox.isChecked())
+        if self._remote_connection_settings is not None:
+            self._remote_connection_settings.replace_all(self._connection_rows)
+        if self._remote_mount_settings is not None:
+            self._remote_mount_settings.replace_all(self._mount_rows)
+
+    def focus_remote_mount(self, mount_id: str) -> bool:
+        key = str(mount_id or "").strip()
+        if not key or self._categories_list is None or self._category_stack is None or self._mount_table is None:
+            return False
+
+        remote_page_index = self._category_stack.indexOf(self._remote_clouds_page) if self._remote_clouds_page is not None else -1
+        if remote_page_index >= 0:
+            self._categories_list.setCurrentRow(remote_page_index)
+            self._category_stack.setCurrentIndex(remote_page_index)
+
+        if self._remote_clouds_tabs is not None:
+            self._remote_clouds_tabs.setCurrentIndex(1)
+
+        for row, item in enumerate(self._mount_rows):
+            if str(item.get("id") or "").strip() != key:
+                continue
+            self._mount_table.selectRow(row)
+            self._load_selected_mount_into_form()
+            self.raise_()
+            self.activateWindow()
+            return True
+        return False
+
+
+def asdict_like(item) -> dict:
+    return dict(item.__dict__)

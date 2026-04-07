@@ -9,6 +9,10 @@ class TreeViewAdapter:
         self.tree_view = tree_view
         self.file_model = file_model
 
+    def _model(self):
+        model = self.tree_view.model()
+        return model if model is not None else self.file_model
+
     def selected_paths(self):
         selection_model = self.tree_view.selectionModel()
         if selection_model is None:
@@ -18,7 +22,10 @@ class TreeViewAdapter:
         for index in selection_model.selectedRows(0):
             if not index.isValid():
                 continue
-            path = self.file_model.filePath(index)
+            model = self._model()
+            if not hasattr(model, "filePath"):
+                continue
+            path = model.filePath(index)
             if path:
                 paths.append(QDir.cleanPath(path))
 
@@ -27,7 +34,10 @@ class TreeViewAdapter:
 
         current_index = self.tree_view.currentIndex()
         if current_index.isValid():
-            current_path = self.file_model.filePath(current_index)
+            model = self._model()
+            if not hasattr(model, "filePath"):
+                return []
+            current_path = model.filePath(current_index)
             if current_path:
                 return [QDir.cleanPath(current_path)]
         return []
@@ -78,13 +88,16 @@ class TreeViewAdapter:
             index = self.tree_view.indexAt(pos)
 
         if index.isValid():
-            target_path = QDir.cleanPath(self.file_model.filePath(index))
-            if self.file_model.isDir(index) and Path(target_path).exists():
+            model = self._model()
+            if not hasattr(model, "filePath") or not hasattr(model, "isDir"):
+                return QDir.cleanPath(current_directory)
+            target_path = QDir.cleanPath(model.filePath(index))
+            if model.isDir(index) and Path(target_path).exists():
                 return target_path
 
             parent_index = index.parent()
             if parent_index.isValid():
-                parent_path = QDir.cleanPath(self.file_model.filePath(parent_index))
+                parent_path = QDir.cleanPath(model.filePath(parent_index))
                 if Path(parent_path).exists():
                     return parent_path
 

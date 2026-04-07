@@ -7,6 +7,10 @@ class IconViewAdapter:
         self.icon_view = icon_view
         self.file_model = file_model
 
+    def _model(self):
+        model = self.icon_view.model()
+        return model if model is not None else self.file_model
+
     def selected_paths(self):
         selection_model = self.icon_view.selectionModel()
         if selection_model is None:
@@ -16,7 +20,10 @@ class IconViewAdapter:
         for index in selection_model.selectedIndexes():
             if not index.isValid() or index.column() != 0:
                 continue
-            path = self.file_model.filePath(index)
+            model = self._model()
+            if not hasattr(model, "filePath"):
+                continue
+            path = model.filePath(index)
             if path:
                 paths.append(QDir.cleanPath(path))
 
@@ -25,7 +32,10 @@ class IconViewAdapter:
 
         current_index = self.icon_view.currentIndex()
         if current_index.isValid():
-            current_path = self.file_model.filePath(current_index)
+            model = self._model()
+            if not hasattr(model, "filePath"):
+                return []
+            current_path = model.filePath(current_index)
             if current_path:
                 return [QDir.cleanPath(current_path)]
         return []
@@ -73,8 +83,11 @@ class IconViewAdapter:
             index = self.icon_view.indexAt(pos)
 
         if index.isValid():
-            target_path = QDir.cleanPath(self.file_model.filePath(index))
-            if self.file_model.isDir(index):
+            model = self._model()
+            if not hasattr(model, "filePath") or not hasattr(model, "isDir"):
+                return QDir.cleanPath(current_directory)
+            target_path = QDir.cleanPath(model.filePath(index))
+            if model.isDir(index):
                 return target_path
 
         return QDir.cleanPath(current_directory)

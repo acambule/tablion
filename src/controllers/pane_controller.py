@@ -16,9 +16,11 @@ except ImportError:
 from localization import app_tr, ask_yes_no
 from debug_log import debug_log
 from backends.local import LocalFileSystemBackend
+from controllers.remote_drive_controller import RemoteDriveController
 from controllers.view_adapters import IconViewAdapter, TreeViewAdapter
 from domain.filesystem import PaneLocation
 from models.file_operations import FileOperations
+from models.remote_file_tree_model import RemoteFileTreeModel
 from services.file_actions import (
     ArkDropService,
     ArchiveService,
@@ -222,7 +224,7 @@ class PaneController(QObject):
                     pass
                 self._directory_loaded_handler = None
 
-    def __init__(self, file_system_model, parent=None, editor_settings=None):
+    def __init__(self, file_system_model, parent=None, editor_settings=None, remote_drive_controller: RemoteDriveController | None = None):
         super().__init__(parent)
         loader = QUiLoader()
         pane_ui_path = Path(__file__).resolve().parent.parent / "ui" / "pane.ui"
@@ -232,6 +234,8 @@ class PaneController(QObject):
         self.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self.model = file_system_model
+        self._remote_drive_controller = remote_drive_controller
+        self._remote_model = RemoteFileTreeModel(self)
         self.file_operations = FileOperations()
         self._local_backend = LocalFileSystemBackend()
         self._open_service = OpenService()
@@ -323,6 +327,36 @@ class PaneController(QObject):
         self.set_show_hidden_files(self._show_hidden_files, persist=False, refresh=False)
 
         self.add_tab("Tab 1", self.current_location.path)
+
+    def _active_file_model(self):
+        if self.current_location is not None and self.current_location.is_remote:
+            return self._remote_model
+        return self.model
+
+    def _apply_browser_model(self, model) -> None:
+        if self.tree_view is not None and self.tree_view.model() is not model:
+            self.tree_view.setModel(model)
+        if self.icon_view is not None and self.icon_view.model() is not model:
+            self.icon_view.setModel(model)
+            self.icon_view.setModelColumn(0)
+
+        if self.tree_view_adapter is not None:
+            self.tree_view_adapter.file_model = model
+        if self.icon_view_adapter is not None:
+            self.icon_view_adapter.file_model = model
+        if getattr(self, "_drop_target_delegate", None) is not None:
+            self._drop_target_delegate._file_model = model
+        if getattr(self, "_icon_view_delegate", None) is not None:
+            self._icon_view_delegate._file_model = model
+
+    def _set_remote_view_interaction_enabled(self, enabled: bool) -> None:
+        for view in (self.tree_view, self.icon_view):
+            if view is None:
+                continue
+            view.setDragEnabled(enabled)
+            view.setAcceptDrops(enabled)
+            view.viewport().setAcceptDrops(enabled)
+            view.setDropIndicatorShown(enabled)
 
     def setup_tab_bar_host(self):
         if self.tab_bar_host.layout() is None:
@@ -895,11 +929,16 @@ class PaneController(QObject):
         return bool(self.current_location and self.current_location.is_local)
 
     def open_path_in_new_tab(self, path, activate=True):
-        location = self._resolve_local_location(path)
+        if isinstance(path, PaneLocation):
+            location = path if path.is_remote else self._resolve_local_location(path.path)
+        else:
+            location = self._resolve_local_location(path)
         if location is None:
             return
 
         tab_title = self._navigation_service.display_name_for_location(location)
+        if location.is_remote and self._remote_drive_controller is not None:
+            tab_title = self._remote_drive_controller.display_name_for_location(location)
         state = TabState(title=tab_title, location=location)
         self.tab_states.append(state)
         self.update_tab_visual(self.tab_bar.addTab(tab_title))
@@ -1235,13 +1274,21 @@ class PaneController(QObject):
                 if not index.isValid():
                     return False
 
-                path = QDir.cleanPath(self.model.filePath(index))
-                if not path or not Path(path).exists():
+                active_model = watched_view.model()
+                if active_model is None or not hasattr(active_model, "filePath") or not hasattr(active_model, "isDir"):
                     return False
-                if not self.model.isDir(index):
+                path = str(active_model.filePath(index) or "").strip()
+                if not path:
+                    return False
+                if self.current_location.is_local and not Path(QDir.cleanPath(path)).exists():
+                    return False
+                if not active_model.isDir(index):
                     return False
 
-                self.open_path_in_new_tab(path, activate=self._middle_click_opens_foreground_tab())
+                target = path
+                if self.current_location is not None and self.current_location.is_remote:
+                    target = PaneLocation(kind="remote", path=path, remote_id=self.current_location.remote_id)
+                self.open_path_in_new_tab(target, activate=self._middle_click_opens_foreground_tab())
                 return True
 
             if event.type() == QEvent.Type.DragEnter:
@@ -2510,6 +2557,34 @@ class PaneController(QObject):
             "}"
         )
 
+        if self.current_location is not None and self.current_location.is_remote:
+            action_refresh = menu.addAction(
+                self._tab_menu_icon("view-refresh", QStyle.StandardPixmap.SP_BrowserReload),
+                app_tr("PaneController", "Aktualisieren"),
+            )
+            current_index = source_view.indexAt(pos) if source_view is not None and hasattr(source_view, "indexAt") else QModelIndex()
+            action_open_browser = None
+            active_model = source_view.model() if source_view is not None else None
+            if (
+                active_model is not None
+                and current_index.isValid()
+                and hasattr(active_model, "isDir")
+                and hasattr(active_model, "fileUrl")
+                and not active_model.isDir(current_index)
+                and str(active_model.fileUrl(current_index) or "").strip()
+            ):
+                action_open_browser = menu.addAction(
+                    self._tab_menu_icon("document-open", QStyle.StandardPixmap.SP_DialogOpenButton),
+                    app_tr("PaneController", "Im Browser öffnen"),
+                )
+
+            chosen = menu.exec(source_view.viewport().mapToGlobal(pos))
+            if chosen == action_refresh:
+                self.refresh_current_directory(force_rescan=True)
+            elif chosen == action_open_browser and active_model is not None:
+                QDesktopServices.openUrl(QUrl(str(active_model.fileUrl(current_index))))
+            return
+
         if self._delete_service.is_trash_context(self.current_location.path):
             delete_icon = QIcon.fromTheme("edit-delete")
             if delete_icon.isNull():
@@ -2809,15 +2884,29 @@ class PaneController(QObject):
         if not index.isValid():
             return
 
-        path = self.model.filePath(index)
+        active_model = self.active_item_view().model() if self.active_item_view() is not None else None
+        if active_model is None or not hasattr(active_model, "filePath") or not hasattr(active_model, "isDir"):
+            return
+        path = active_model.filePath(index)
         clean_path = QDir.cleanPath(str(path))
-        if not clean_path or not Path(clean_path).exists():
+        if not clean_path:
             return
 
-        if self.model.isDir(index):
-            self.navigate_to(clean_path)
+        if active_model.isDir(index):
+            if self.current_location is not None and self.current_location.is_remote:
+                self.navigate_to(PaneLocation(kind="remote", path=clean_path, remote_id=self.current_location.remote_id))
+            else:
+                self.navigate_to(clean_path)
             return
 
+        if self.current_location.is_remote and hasattr(active_model, "fileUrl"):
+            remote_url = str(active_model.fileUrl(index) or "").strip()
+            if remote_url:
+                QDesktopServices.openUrl(QUrl(remote_url))
+            return
+
+        if not Path(clean_path).exists():
+            return
         QDesktopServices.openUrl(QUrl.fromLocalFile(clean_path))
 
     def navigate_to(self, path, push_history=True):
@@ -2868,6 +2957,8 @@ class PaneController(QObject):
         self._set_current_location(location)
 
         tab_title = self._navigation_service.display_name_for_location(location)
+        if location.is_remote and self._remote_drive_controller is not None:
+            tab_title = self._remote_drive_controller.display_name_for_location(location)
         active_state.title = tab_title
         if self.active_tab_index >= 0:
             self.tab_bar.setTabText(self.active_tab_index, tab_title)
@@ -2875,15 +2966,31 @@ class PaneController(QObject):
 
         if location.is_remote:
             self._pending_root_path = None
+            if self._remote_drive_controller is None:
+                self.show_operation_feedback(
+                    app_tr("PaneController", "Remote-Kontexte sind im Pane noch nicht aktiviert")
+                )
+                return
+            try:
+                entries = self._remote_drive_controller.list_directory(location)
+            except Exception as error:
+                self.show_operation_feedback(str(error))
+                return
+            self._remote_model.set_directory_entries(location, entries)
+            self._apply_browser_model(self._remote_model)
+            self._set_remote_view_interaction_enabled(False)
+            if self.tree_view is not None:
+                self.tree_view.setRootIndex(QModelIndex())
+            if self.icon_view is not None:
+                self.icon_view.setRootIndex(QModelIndex())
             if self.path_bar:
                 self.path_bar.set_location(location)
             self.currentPathChanged.emit(location.path)
             self.emit_navigation_state()
-            self.show_operation_feedback(
-                app_tr("PaneController", "Remote-Kontexte sind im Pane noch nicht aktiviert")
-            )
             return
 
+        self._apply_browser_model(self.model)
+        self._set_remote_view_interaction_enabled(True)
         self._pending_root_path = target_path
         root_index = self.model.setRootPath(target_path)
         index = root_index if root_index.isValid() else self.model.index(target_path)
@@ -2911,9 +3018,12 @@ class PaneController(QObject):
 
     def navigate_up(self):
         current_location = self.current_location
-        if current_location is None or current_location.is_remote:
+        if current_location is None:
             return
-        parent_location = self._navigation_service.get_parent_location(current_location)
+        if current_location.is_remote:
+            parent_location = self._remote_drive_controller.get_parent_location(current_location) if self._remote_drive_controller is not None else None
+        else:
+            parent_location = self._navigation_service.get_parent_location(current_location)
         if parent_location is None:
             return
         self.navigate_to(parent_location)
@@ -2924,8 +3034,12 @@ class PaneController(QObject):
 
     def can_go_up(self):
         current_location = self.current_location
-        if current_location is None or current_location.is_remote:
+        if current_location is None:
             return False
+        if current_location.is_remote:
+            if self._remote_drive_controller is None:
+                return False
+            return self._remote_drive_controller.get_parent_location(current_location) is not None
         return self._navigation_service.get_parent_location(current_location) is not None
 
     def current_path(self):
@@ -3097,7 +3211,7 @@ class PaneController(QObject):
         )
 
         self.commit_pending_tree_edit()
-        if force_rescan:
+        if force_rescan and self.current_location is not None and self.current_location.is_local:
             # Force QFileSystemModel cache invalidation by switching root once.
             try:
                 self.model.setRootPath(QDir.rootPath())

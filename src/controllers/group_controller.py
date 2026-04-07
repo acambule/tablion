@@ -26,6 +26,7 @@ class GroupController:
         update_nav_buttons,
         plain_tabbing_mode=True,
         editor_settings: Optional[EditorSettings] = None,
+        remote_drive_controller=None,
     ):
         self.group_tabs = group_tabs
         self.model = model
@@ -37,6 +38,7 @@ class GroupController:
         self.update_nav_buttons = update_nav_buttons
         self.plain_tabbing_mode = plain_tabbing_mode
         self.editor_settings = editor_settings
+        self.remote_drive_controller = remote_drive_controller
 
         self.group_panes_by_page = {}
 
@@ -80,6 +82,7 @@ class GroupController:
                 self.model,
                 parent=self.host_ui,
                 editor_settings=self.editor_settings,
+                remote_drive_controller=self.remote_drive_controller,
             )
             pane_controller.widget.setParent(None)
             pane_controller.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -95,6 +98,7 @@ class GroupController:
             self.model,
             parent=self.host_ui,
             editor_settings=self.editor_settings,
+            remote_drive_controller=self.remote_drive_controller,
         )
         pane_controller.widget.setParent(None)
         pane_controller.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
