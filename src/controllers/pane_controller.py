@@ -21,7 +21,16 @@ from backends.local import LocalFileSystemBackend
 from controllers.view_adapters import IconViewAdapter, TreeViewAdapter
 from domain.filesystem import PaneLocation
 from models.file_operations import FileOperations
-from services.file_actions import BatchRenameService, DeleteService, OpenService, TransferService, TrashRestoreService
+from services.file_actions import (
+    ArchiveService,
+    BatchRenameService,
+    CreationService,
+    DeleteService,
+    LinkService,
+    OpenService,
+    TransferService,
+    TrashRestoreService,
+)
 from services.navigation import HistoryService, PaneNavigationService, PaneStateService, SelectionRestoreService
 from widgets.batch_rename_dialog import BatchRenameDialog
 from widgets.path_bar import PathBar
@@ -276,6 +285,9 @@ class PaneController(QObject):
         self._open_service = OpenService()
         self._delete_service = DeleteService()
         self._batch_rename_service = BatchRenameService()
+        self._archive_service = ArchiveService()
+        self._creation_service = CreationService()
+        self._link_service = LinkService()
         self._transfer_service = TransferService()
         self._trash_restore_service = TrashRestoreService()
         self._navigation_service = PaneNavigationService(self._local_backend)
@@ -1540,16 +1552,8 @@ class PaneController(QObject):
         return suffix in self._EDITABLE_EXTENSIONS
 
     def _selected_archive_path(self) -> str | None:
-        paths = self.selected_paths()
-        if len(paths) != 1:
-            return None
-        archive_path = QDir.cleanPath(str(paths[0]))
-        path_obj = Path(archive_path)
-        if not path_obj.exists() or path_obj.is_dir():
-            return None
-        if not self.file_operations.is_supported_archive(path_obj):
-            return None
-        return archive_path
+        paths = [QDir.cleanPath(str(path)) for path in self.selected_paths()]
+        return self._archive_service.selected_archive_path(paths, file_operations=self.file_operations)
 
     def _single_selected_existing_path(self) -> str | None:
         paths = self.selected_paths()
@@ -1561,29 +1565,17 @@ class PaneController(QObject):
         return clean_path
 
     def _archive_creation_sources(self) -> list[str]:
-        paths = self.selected_paths()
-        if len(paths) < 2:
-            return []
-        return [QDir.cleanPath(str(path)) for path in paths if Path(path).exists()]
+        paths = [QDir.cleanPath(str(path)) for path in self.selected_paths()]
+        return self._archive_service.archive_creation_sources(paths)
 
     def _default_archive_target_path(self, sources: list[str], suffix: str) -> str:
-        source_paths = [Path(source) for source in sources]
-        parent_counts: dict[Path, int] = {}
-        for source_path in source_paths:
-            parent_counts[source_path.parent] = parent_counts.get(source_path.parent, 0) + 1
-
-        target_parent = max(parent_counts, key=parent_counts.get) if parent_counts else Path(self.current_directory)
-        if len(source_paths) == 2:
-            stem = f"{source_paths[0].stem}-{source_paths[1].stem}"
-        else:
-            stem = app_tr("PaneController", "Archiv")
-        return str(target_parent / f"{stem}{suffix}")
+        default_target = self._archive_service.default_archive_target_path(sources, suffix)
+        if sources:
+            return default_target
+        return str(Path(self.current_directory) / f"{app_tr('PaneController', 'Archiv')}{suffix}")
 
     def _archive_suffix_for_filter(self, selected_filter: str) -> str:
-        for filter_label, suffix in self._ARCHIVE_SAVE_FILTERS:
-            if selected_filter == filter_label:
-                return suffix
-        return ".zip"
+        return self._archive_service.archive_suffix_for_filter(selected_filter, self._ARCHIVE_SAVE_FILTERS)
 
     def show_hidden_files(self) -> bool:
         if self.model is None:
@@ -1689,7 +1681,11 @@ class PaneController(QObject):
         target_directory = QDir.cleanPath(destination or str(archive_obj.parent))
 
         try:
-            extracted_targets = self.file_operations.extract_archive(archive_obj, target_directory)
+            extracted_targets = self._archive_service.extract_archive(
+                archive_path,
+                target_directory,
+                file_operations=self.file_operations,
+            )
         except (FileExistsError, FileNotFoundError, OSError, ValueError) as error:
             QMessageBox.warning(
                 self.widget,
@@ -1747,12 +1743,14 @@ class PaneController(QObject):
             return
 
         suffix = self._archive_suffix_for_filter(selected_filter)
-        archive_path = Path(selected_path)
-        if not archive_path.name.lower().endswith(suffix):
-            archive_path = archive_path.with_name(f"{archive_path.name}{suffix}")
+        archive_path = self._archive_service.build_archive_path(selected_path, suffix)
 
         try:
-            self.file_operations.create_archive(source_paths, archive_path, overwrite=False)
+            self._archive_service.create_archive(
+                source_paths,
+                archive_path,
+                file_operations=self.file_operations,
+            )
         except (FileExistsError, FileNotFoundError, OSError, ValueError) as error:
             QMessageBox.warning(
                 self.widget,
@@ -2143,32 +2141,16 @@ class PaneController(QObject):
         if not source_paths:
             return False
 
+        clean_sources = [QDir.cleanPath(str(source)) for source in source_paths]
         target_dir = QDir.cleanPath(target_directory)
-        if not QDir(target_dir).exists():
-            return False
-
-        changes_applied = False
-        for source in source_paths:
-            source_clean = QDir.cleanPath(source)
-            source_path = Path(source_clean)
-            if not source_path.exists():
-                continue
-
-            target_path = Path(target_dir) / source_path.name
-            if target_path.exists():
-                continue
-
-            try:
-                target_path.symlink_to(source_path)
-                changes_applied = True
-            except (FileExistsError, FileNotFoundError, OSError, ValueError):
-                continue
+        created_links = self._link_service.create_links(clean_sources, target_dir)
+        changes_applied = bool(created_links)
 
         if changes_applied:
             self.refresh_current_directory()
             self.filesystemMutationCommitted.emit()
             self.show_operation_feedback(
-                app_tr("PaneController", "{count} Verknüpfung(en) erstellt").format(count=len(source_paths))
+                app_tr("PaneController", "{count} Verknüpfung(en) erstellt").format(count=len(created_links))
             )
         return changes_applied
 
@@ -2316,20 +2298,8 @@ class PaneController(QObject):
 
     def create_folder(self, target_directory=None, base_name=None):
         destination = QDir.cleanPath(target_directory or self.resolve_drop_target_directory())
-        if not QDir(destination).exists():
-            return None
-
-        base_name = (base_name or app_tr("PaneController", "Neuer Ordner")).strip()
-
-        candidate = Path(destination) / base_name
-        suffix = 2
-        while candidate.exists():
-            candidate = Path(destination) / f"{base_name} {suffix}"
-            suffix += 1
-
-        try:
-            candidate.mkdir(parents=False, exist_ok=False)
-        except OSError:
+        candidate = self._creation_service.create_folder(destination, base_name)
+        if candidate is None:
             return None
 
         self._pending_created_item_path = QDir.cleanPath(str(candidate))
@@ -2364,22 +2334,8 @@ class PaneController(QObject):
 
     def create_file(self, target_directory=None, base_name=None):
         destination = QDir.cleanPath(target_directory or self.resolve_drop_target_directory())
-        if not QDir(destination).exists():
-            return None
-
-        base_name = (base_name or app_tr("PaneController", "Neue Datei.txt")).strip()
-
-        base_stem = Path(base_name).stem or app_tr("PaneController", "Neue Datei")
-        suffix = Path(base_name).suffix or ".txt"
-        candidate = Path(destination) / f"{base_stem}{suffix}"
-        counter = 2
-        while candidate.exists():
-            candidate = Path(destination) / f"{base_stem} {counter}{suffix}"
-            counter += 1
-
-        try:
-            candidate.touch(exist_ok=False)
-        except OSError:
+        candidate = self._creation_service.create_file(destination, base_name)
+        if candidate is None:
             return None
 
         self._pending_created_item_path = QDir.cleanPath(str(candidate))
