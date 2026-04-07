@@ -1,10 +1,7 @@
 import json
 import os
-import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote
-from uuid import uuid4
 
 from PySide6.QtCore import QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex, QProcess, QThread
 from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QDesktopServices, QIcon, QDrag, QKeySequence, QPen
@@ -24,12 +21,12 @@ from backends.local import LocalFileSystemBackend
 from controllers.view_adapters import IconViewAdapter, TreeViewAdapter
 from domain.filesystem import PaneLocation
 from models.file_operations import FileOperations
+from services.file_actions import BatchRenameService, DeleteService, OpenService, TransferService, TrashRestoreService
 from services.navigation import HistoryService, PaneNavigationService, PaneStateService, SelectionRestoreService
-from utils.batch_rename import render_batch_rename_name
 from widgets.batch_rename_dialog import BatchRenameDialog
 from widgets.path_bar import PathBar
 from widgets.properties_dialog import PropertiesDialog
-from utils.open_with import applications_for_path, launch_with_application
+from utils.open_with import applications_for_path
 from models.pane_tab_state import TabState
 
 
@@ -276,6 +273,11 @@ class PaneController(QObject):
         self.model = file_system_model
         self.file_operations = FileOperations()
         self._local_backend = LocalFileSystemBackend()
+        self._open_service = OpenService()
+        self._delete_service = DeleteService()
+        self._batch_rename_service = BatchRenameService()
+        self._transfer_service = TransferService()
+        self._trash_restore_service = TrashRestoreService()
         self._navigation_service = PaneNavigationService(self._local_backend)
         self._history_service = HistoryService()
         self._pane_state_service = PaneStateService()
@@ -1618,7 +1620,7 @@ class PaneController(QObject):
         target_path = self._single_selected_existing_path()
         if target_path is None:
             return
-        if launch_with_application(application, target_path):
+        if self._open_service.open_with_application(application, target_path):
             return
         QMessageBox.warning(
             self.widget,
@@ -1640,16 +1642,7 @@ class PaneController(QObject):
         self.filesystemMutationCommitted.emit()
 
     def _is_application_target(self, path: str) -> bool:
-        path_obj = Path(path)
-        if path_obj.is_dir():
-            return False
-        suffix = path_obj.suffix.lower()
-        if suffix in self._APPLICATION_LAUNCH_EXTENSIONS:
-            return True
-        try:
-            return path_obj.exists() and os.access(path, os.X_OK)
-        except OSError:
-            return False
+        return self._open_service.is_application_target(path, self._APPLICATION_LAUNCH_EXTENSIONS)
 
     def activate_selection(self):
         paths = self.selected_paths()
@@ -1669,7 +1662,7 @@ class PaneController(QObject):
             if behavior == "edit" and target_path.suffix.lower() in self._EDITABLE_EXTENSIONS:
                 self.open_selection_in_editor()
                 return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(target))
+        self._open_service.open_default(target)
 
     def open_selection_in_editor(self):
         paths = self.selected_paths()
@@ -1685,16 +1678,7 @@ class PaneController(QObject):
         editor_cmd = None
         if self._editor_settings is not None:
             editor_cmd = self._editor_settings.preferred_editor()
-        if not editor_cmd:
-            editor_cmd = os.environ.get("TABLION_EDITOR")
-        if editor_cmd:
-            parts = shlex.split(editor_cmd)
-            if parts:
-                program, *args = parts
-                QProcess.startDetached(program, [*args, target])
-                return
-
-        QDesktopServices.openUrl(QUrl.fromLocalFile(target))
+        self._open_service.open_in_editor(target, preferred_editor=editor_cmd)
 
     def extract_selected_archive(self, destination: str | None = None):
         archive_path = self._selected_archive_path()
@@ -1788,10 +1772,12 @@ class PaneController(QObject):
         if not source_paths:
             return
 
-        mime_data = QMimeData()
-        mime_data.setUrls([QUrl.fromLocalFile(path) for path in source_paths])
-        mime_data.setData(self._CLIPBOARD_MIME_TYPE, json.dumps(source_paths).encode("utf-8"))
-        mime_data.setData(self._CLIPBOARD_OPERATION_MIME_TYPE, b"copy")
+        mime_data = self._transfer_service.build_clipboard_mime_data(
+            source_paths,
+            path_mime_type=self._CLIPBOARD_MIME_TYPE,
+            operation_mime_type=self._CLIPBOARD_OPERATION_MIME_TYPE,
+            operation="copy",
+        )
         QApplication.clipboard().setMimeData(mime_data)
         self.clear_cut_state()
         self.show_operation_feedback(
@@ -1803,10 +1789,12 @@ class PaneController(QObject):
         if not source_paths:
             return
 
-        mime_data = QMimeData()
-        mime_data.setUrls([QUrl.fromLocalFile(path) for path in source_paths])
-        mime_data.setData(self._CLIPBOARD_MIME_TYPE, json.dumps(source_paths).encode("utf-8"))
-        mime_data.setData(self._CLIPBOARD_OPERATION_MIME_TYPE, b"cut")
+        mime_data = self._transfer_service.build_clipboard_mime_data(
+            source_paths,
+            path_mime_type=self._CLIPBOARD_MIME_TYPE,
+            operation_mime_type=self._CLIPBOARD_OPERATION_MIME_TYPE,
+            operation="cut",
+        )
         QApplication.clipboard().setMimeData(mime_data)
         self._cut_paths = set(source_paths)
         self.update_cut_visual_state()
@@ -1954,35 +1942,17 @@ class PaneController(QObject):
         return adapter.resolve_drop_target_directory(pos, self.current_directory)
 
     def _build_file_operation_tasks(self, source_paths, target_directory, operation):
-        tasks = []
-        target_dir = QDir.cleanPath(target_directory)
-        if not QDir(target_dir).exists():
-            return tasks
-
-        for source in source_paths:
-            source_clean = QDir.cleanPath(source)
-            source_path = Path(source_clean)
-            if not source_path.exists():
-                continue
-
-            target_path = Path(target_dir) / source_path.name
-            if operation == "copy" and QDir.cleanPath(str(target_path)) == source_clean:
-                target_path = self.build_next_duplicate_path(source_path, Path(target_dir))
-
-            if operation == "move" and QDir.cleanPath(str(target_path)) == source_clean:
-                continue
-            if target_path.exists():
-                continue
-
-            tasks.append(
-                FileOperationTask(
-                    source_path=str(source_path),
-                    target_path=str(target_path),
-                    name=source_path.name,
-                )
-            )
-
-        return tasks
+        normalized_sources = [QDir.cleanPath(str(source)) for source in source_paths]
+        normalized_target = QDir.cleanPath(target_directory)
+        tasks = self._transfer_service.build_file_operation_tasks(
+            normalized_sources,
+            normalized_target,
+            operation,
+        )
+        return [
+            FileOperationTask(task.source_path, task.target_path, task.name)
+            for task in tasks
+        ]
 
     def _log_drop_event_state(self, stage, event, source_paths=None, target_dir=None, watched_view=None):
         mime_data = event.mimeData() if event is not None else None
@@ -2142,50 +2112,26 @@ class PaneController(QObject):
         return self._start_file_operation(source_paths, target_directory, "copy")
 
     def build_next_duplicate_path(self, source_path, target_dir):
-        source_name = source_path.name
-        if source_path.is_file():
-            stem = source_path.stem
-            suffix = source_path.suffix
-            candidate = target_dir / f"{stem} - Kopie{suffix}"
-            counter = 2
-            while candidate.exists():
-                candidate = target_dir / f"{stem} - Kopie {counter}{suffix}"
-                counter += 1
-            return candidate
-
-        candidate = target_dir / f"{source_name} - Kopie"
-        counter = 2
-        while candidate.exists():
-            candidate = target_dir / f"{source_name} - Kopie {counter}"
-            counter += 1
-        return candidate
+        return self._transfer_service.build_next_duplicate_path(source_path, target_dir)
 
     def duplicate_selection(self):
         source_paths = self.selected_paths()
         if not source_paths:
             return False
 
-        changes_applied = False
-        for source in source_paths:
-            source_clean = QDir.cleanPath(source)
-            source_path = Path(source_clean)
-            if not source_path.exists():
-                continue
-
-            target_dir = source_path.parent
-            duplicate_target = self.build_next_duplicate_path(source_path, target_dir)
-            try:
-                self.file_operations.copy(source_path, duplicate_target, overwrite=False)
-                changes_applied = True
-            except (FileExistsError, FileNotFoundError, OSError, ValueError):
-                continue
+        clean_sources = [QDir.cleanPath(str(source)) for source in source_paths]
+        duplicate_result = self._transfer_service.duplicate_paths(
+            clean_sources,
+            file_operations=self.file_operations,
+        )
+        changes_applied = bool(duplicate_result.duplicated_paths)
 
         if changes_applied:
             self.refresh_current_directory(preserve_focus=True)
             self.filesystemMutationCommitted.emit()
             self.optimize_columns()
             self.show_operation_feedback(
-                app_tr("PaneController", "{count} Element(e) dupliziert").format(count=len(source_paths))
+                self._transfer_service.duplicate_feedback(len(duplicate_result.duplicated_paths))
             )
 
         return changes_applied
@@ -2263,7 +2209,7 @@ class PaneController(QObject):
         if not selected:
             return
 
-        existing_selected = [target for target in selected if Path(QDir.cleanPath(target)).exists()]
+        existing_selected = self._delete_service.existing_paths(selected)
         if not existing_selected:
             self.refresh_current_directory(preserve_focus=True)
             self.show_operation_feedback(app_tr("PaneController", "Element bereits entfernt"))
@@ -2272,37 +2218,22 @@ class PaneController(QObject):
         if permanent is None:
             permanent = self.is_trash_context() or self.is_temporary_context()
 
-        if len(existing_selected) == 1:
-            target_label = Path(existing_selected[0]).name or existing_selected[0]
-            if permanent:
-                message = app_tr("PaneController", "'{target}' dauerhaft löschen?").format(target=target_label)
-            else:
-                message = app_tr("PaneController", "'{target}' in den Papierkorb verschieben?").format(target=target_label)
-        else:
-            if permanent:
-                message = app_tr("PaneController", "{count} Elemente dauerhaft löschen?").format(count=len(existing_selected))
-            else:
-                message = app_tr("PaneController", "{count} Elemente in den Papierkorb verschieben?").format(count=len(existing_selected))
-
+        title, message = self._delete_service.build_confirmation(existing_selected, permanent)
         confirmed = ask_yes_no(
             self.widget,
-            app_tr("PaneController", "Dauerhaft löschen") if permanent else app_tr("PaneController", "In den Papierkorb verschieben"),
+            title,
             message,
             default_no=True,
         )
         if not confirmed:
             return
 
-        changes_applied = False
-        delete_errors = []
-        for target in existing_selected:
-            try:
-                self.file_operations.delete(target, permanent=permanent)
-                changes_applied = True
-            except RuntimeError as error:
-                delete_errors.append(str(error))
-            except (FileNotFoundError, OSError, ValueError):
-                continue
+        delete_result = self._delete_service.execute(
+            existing_selected,
+            permanent=permanent,
+            file_operations=self.file_operations,
+        )
+        changes_applied = bool(delete_result.deleted_paths)
 
         if changes_applied:
             for view in (self.tree_view, self.icon_view):
@@ -2325,118 +2256,42 @@ class PaneController(QObject):
             )
             self.show_operation_feedback(
                 app_tr("PaneController", "{count} Element(e) {action}").format(
-                    count=len(existing_selected),
+                    count=len(delete_result.deleted_paths),
                     action=action_text,
                 )
             )
 
-        if delete_errors:
+        if delete_result.errors:
             QMessageBox.warning(
                 self.widget,
                 app_tr("PaneController", "Löschen fehlgeschlagen"),
-                delete_errors[0],
+                delete_result.errors[0],
             )
-
-    def _trash_info_path_for(self, trashed_path):
-        trashed = Path(QDir.cleanPath(str(trashed_path))).expanduser()
-        parent_dir = trashed.parent
-        if parent_dir.name != "files":
-            return None
-
-        info_dir = parent_dir.parent / "info"
-        return info_dir / f"{trashed.name}.trashinfo"
-
-    def _read_trash_original_path(self, trashed_path):
-        info_path = self._trash_info_path_for(trashed_path)
-        if info_path is None or not info_path.exists():
-            return None
-
-        try:
-            with info_path.open("r", encoding="utf-8", errors="ignore") as handle:
-                for line in handle:
-                    if line.startswith("Path="):
-                        raw_value = line.split("=", 1)[1].strip()
-                        return Path(unquote(raw_value)).expanduser()
-        except OSError:
-            return None
-
-        return None
-
-    def _build_restore_target(self, original_path):
-        target = Path(original_path)
-        if not target.exists():
-            return target
-
-        if target.is_file():
-            stem = target.stem
-            suffix = target.suffix
-            restored_suffix = app_tr("PaneController", "Wiederhergestellt")
-            candidate = target.with_name(f"{stem} - {restored_suffix}{suffix}")
-            counter = 2
-            while candidate.exists():
-                candidate = target.with_name(f"{stem} - {restored_suffix} {counter}{suffix}")
-                counter += 1
-            return candidate
-
-        restored_suffix = app_tr("PaneController", "Wiederhergestellt")
-        candidate = target.with_name(f"{target.name} - {restored_suffix}")
-        counter = 2
-        while candidate.exists():
-            candidate = target.with_name(f"{target.name} - {restored_suffix} {counter}")
-            counter += 1
-        return candidate
 
     def restore_selected_from_trash(self):
         selected = self.selected_paths()
         if not selected:
             return
 
-        restored_count = 0
-        restore_errors = []
-        for trashed in selected:
-            trashed_path = Path(QDir.cleanPath(trashed))
-            if not trashed_path.exists():
-                continue
+        restore_result = self._trash_restore_service.restore_paths(
+            selected,
+            file_operations=self.file_operations,
+        )
 
-            original_path = self._read_trash_original_path(trashed_path)
-            if original_path is None:
-                restore_errors.append(
-                    app_tr("PaneController", "Wiederherstellen fehlgeschlagen: Metadaten fehlen für '{name}'.").format(
-                        name=trashed_path.name
-                    )
-                )
-                continue
-
-            restore_target = self._build_restore_target(original_path)
-            try:
-                self.file_operations.move(trashed_path, restore_target, overwrite=False)
-                info_path = self._trash_info_path_for(trashed_path)
-                if info_path is not None and info_path.exists():
-                    try:
-                        info_path.unlink()
-                    except OSError:
-                        pass
-                restored_count += 1
-            except (FileExistsError, FileNotFoundError, OSError, ValueError) as error:
-                restore_errors.append(
-                    app_tr("PaneController", "Wiederherstellen fehlgeschlagen für '{name}': {error}").format(
-                        name=trashed_path.name,
-                        error=error,
-                    )
-                )
-
-        if restored_count > 0:
+        if restore_result.restored_paths:
             self.refresh_current_directory(preserve_focus=True)
             self.filesystemMutationCommitted.emit()
             self.show_operation_feedback(
-                app_tr("PaneController", "{count} Element(e) wiederhergestellt").format(count=restored_count)
+                app_tr("PaneController", "{count} Element(e) wiederhergestellt").format(
+                    count=len(restore_result.restored_paths)
+                )
             )
 
-        if restore_errors:
+        if restore_result.errors:
             QMessageBox.warning(
                 self.widget,
                 app_tr("PaneController", "Wiederherstellen fehlgeschlagen"),
-                restore_errors[0],
+                restore_result.errors[0],
             )
 
     def paste_from_clipboard(self, target_directory=None):
@@ -2636,75 +2491,11 @@ class PaneController(QObject):
                 str(error),
             )
 
-    def _render_batch_rename_name(self, source_path, rule_text, number, regex_mode=False):
-        try:
-            return render_batch_rename_name(source_path, rule_text, number, regex_mode=regex_mode)
-        except ValueError as error:
-            message = str(error).strip()
-            if not message:
-                message = app_tr("PaneController", "Ungültige Umbenennungsregel")
-            raise ValueError(message) from error
-
     def _build_batch_rename_plan(self, source_paths, rule_text, regex_mode=False):
-        plan = []
-        source_set = {QDir.cleanPath(str(path)) for path in source_paths}
-        target_set = set()
-
-        for number, source_path in enumerate(source_paths, start=1):
-            source = Path(source_path)
-            if not source.exists():
-                raise FileNotFoundError(
-                    app_tr("PaneController", "Pfad nicht gefunden: {path}").format(path=source_path)
-                )
-
-            new_name = self._render_batch_rename_name(source_path, rule_text, number, regex_mode=regex_mode)
-            if not new_name:
-                raise ValueError(app_tr("PaneController", "Der neue Name darf nicht leer sein"))
-            if "/" in new_name or "\\" in new_name:
-                raise ValueError(app_tr("PaneController", "Der neue Name darf keinen Pfad enthalten"))
-
-            target_path = QDir.cleanPath(str(source.with_name(new_name)))
-            if target_path in target_set:
-                raise FileExistsError(
-                    app_tr("PaneController", "Mehrere Dateien würden denselben Namen erhalten: {path}").format(
-                        path=target_path
-                    )
-                )
-
-            target_existing = Path(target_path)
-            if target_existing.exists() and target_path not in source_set:
-                raise FileExistsError(
-                    app_tr("PaneController", "Ziel existiert bereits: {path}").format(path=target_path)
-                )
-
-            plan.append((QDir.cleanPath(str(source_path)), target_path))
-            target_set.add(target_path)
-
-        return plan
+        return self._batch_rename_service.build_plan(source_paths, rule_text, regex_mode=regex_mode)
 
     def _execute_batch_rename_plan(self, rename_plan):
-        if not rename_plan:
-            return
-
-        temp_paths = []
-        try:
-            for index, (source_path, _target_path) in enumerate(rename_plan, start=1):
-                source = Path(source_path)
-                temp_name = f".tablion-rename-{uuid4().hex}-{index}"
-                temp_path = source.with_name(temp_name)
-                source.rename(temp_path)
-                temp_paths.append((temp_path, source_path))
-
-            for (temp_path, original_source), (_source_path, target_path) in zip(temp_paths, rename_plan):
-                temp_path.rename(Path(target_path))
-        except Exception:
-            for temp_path, original_source in reversed(temp_paths):
-                if temp_path.exists() and not Path(original_source).exists():
-                    try:
-                        temp_path.rename(Path(original_source))
-                    except OSError:
-                        pass
-            raise
+        self._batch_rename_service.execute_plan(rename_plan)
 
     def on_model_file_renamed(self, directory_path, _old_name, _new_name):
         renamed_directory = QDir.cleanPath(str(directory_path))
