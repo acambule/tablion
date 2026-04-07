@@ -1,7 +1,7 @@
 import json
 import os
 import shlex
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote
 from uuid import uuid4
@@ -24,24 +24,13 @@ from backends.local import LocalFileSystemBackend
 from controllers.view_adapters import IconViewAdapter, TreeViewAdapter
 from domain.filesystem import PaneLocation
 from models.file_operations import FileOperations
-from services.navigation import PaneNavigationService
+from services.navigation import HistoryService, PaneNavigationService, PaneStateService, SelectionRestoreService
 from utils.batch_rename import render_batch_rename_name
 from widgets.batch_rename_dialog import BatchRenameDialog
 from widgets.path_bar import PathBar
 from widgets.properties_dialog import PropertiesDialog
 from utils.open_with import applications_for_path, launch_with_application
-
-
-@dataclass
-class TabState:
-    title: str
-    path: str
-    pinned: bool = False
-    view_mode: str = "details"
-    icon_zoom_percent: int = 100
-    history: list[str] = field(default_factory=list)
-    scroll_value: int = 0
-    selected_paths: list[str] = field(default_factory=list)
+from models.pane_tab_state import TabState
 
 
 @dataclass(frozen=True)
@@ -288,6 +277,9 @@ class PaneController(QObject):
         self.file_operations = FileOperations()
         self._local_backend = LocalFileSystemBackend()
         self._navigation_service = PaneNavigationService(self._local_backend)
+        self._history_service = HistoryService()
+        self._pane_state_service = PaneStateService()
+        self._selection_restore_service = SelectionRestoreService()
         self.path_bar = None
         self.btn_search = None
         self.btn_view_mode = None
@@ -310,8 +302,6 @@ class PaneController(QObject):
         self.current_directory = QDir.homePath()
         self.filetree_view_mode = "details"
         self._pending_root_path = None
-        self._pending_restore_selection: list[str] = []
-        self._pending_restore_scroll = 0
         self._pending_created_item_path = None
         self._drop_target_index = QModelIndex()
         self._drop_target_is_root = False
@@ -490,6 +480,22 @@ class PaneController(QObject):
             active_view.setFocus(Qt.FocusReason.OtherFocusReason)
         except RuntimeError:
             return
+
+    def _restore_index_for_path(self, path: str):
+        return self.model.index(path)
+
+    def _restore_select_index(self, index) -> None:
+        if not getattr(index, "isValid", lambda: False)():
+            return
+        adapter = self.active_view_adapter()
+        if adapter is not None:
+            adapter.select_single_index(index, focus=False)
+
+    def _restore_scroll_value(self, value: int) -> None:
+        active_view = self.active_item_view()
+        scrollbar = active_view.verticalScrollBar() if active_view is not None else None
+        if scrollbar:
+            scrollbar.setValue(value)
 
     def setup_icon_view(self):
         self.icon_view = QListView(self.widget)
@@ -1629,7 +1635,7 @@ class PaneController(QObject):
         dialog.exec()
 
     def _on_properties_dialog_path_changed(self, new_path: str):
-        self._pending_restore_selection = [QDir.cleanPath(new_path)]
+        self._selection_restore_service.remember_single_path(QDir.cleanPath(new_path))
         self.refresh_current_directory(preserve_focus=True, force_rescan=True)
         self.filesystemMutationCommitted.emit()
 
@@ -3190,19 +3196,7 @@ class PaneController(QObject):
 
     def clone_tab_states(self):
         self.capture_tab_state(self.active_tab_index)
-        return [
-            TabState(
-                title=state.title,
-                path=state.path,
-                pinned=state.pinned,
-                view_mode=state.view_mode,
-                icon_zoom_percent=getattr(state, "icon_zoom_percent", 100),
-                history=list(state.history),
-                scroll_value=state.scroll_value,
-                selected_paths=list(state.selected_paths),
-            )
-            for state in self.tab_states
-        ]
+        return self._pane_state_service.clone_states(self.tab_states)
 
     def replace_tabs(self, states, active_index=0):
         self.tab_bar.blockSignals(True)
@@ -3212,18 +3206,9 @@ class PaneController(QObject):
         self.active_tab_index = -1
 
         for state in states:
-            self.tab_states.append(
-                TabState(
-                    title=state.title,
-                    path=QDir.cleanPath(state.path),
-                    pinned=bool(getattr(state, "pinned", False)),
-                    view_mode=state.view_mode,
-                    icon_zoom_percent=int(getattr(state, "icon_zoom_percent", 100)),
-                    history=list(state.history),
-                    scroll_value=state.scroll_value,
-                    selected_paths=list(state.selected_paths),
-                )
-            )
+            cloned_state = self._pane_state_service.clone_state(state)
+            cloned_state.path = QDir.cleanPath(cloned_state.path)
+            self.tab_states.append(cloned_state)
             index = self.tab_bar.addTab(state.title)
             self.update_tab_visual(index)
 
@@ -3258,45 +3243,36 @@ class PaneController(QObject):
             return
 
         state = self.tab_states[tab_index]
-        state.path = self.current_directory
-        state.view_mode = self.filetree_view_mode
-        state.icon_zoom_percent = self.icon_zoom_percent
 
         active_view = self.active_item_view()
         scrollbar = active_view.verticalScrollBar() if active_view is not None else None
-        if scrollbar:
-            state.scroll_value = scrollbar.value()
-
-        state.selected_paths = self.selected_paths()
+        scroll_value = scrollbar.value() if scrollbar else 0
+        self._pane_state_service.capture_state(
+            state,
+            current_path=self.current_directory,
+            view_mode=self.filetree_view_mode,
+            icon_zoom_percent=self.icon_zoom_percent,
+            selected_paths=self.selected_paths(),
+            scroll_value=scroll_value,
+        )
 
     def apply_tab_state(self, state, push_history=False):
         self.icon_zoom_percent = max(50, min(300, int(getattr(state, "icon_zoom_percent", 100))))
         self.apply_view_mode(state.view_mode)
         self.navigate_to(state.path, push_history=push_history)
 
-        self._pending_restore_selection = list(state.selected_paths)
-        self._pending_restore_scroll = state.scroll_value
+        self._selection_restore_service.remember(state.selected_paths, state.scroll_value)
         QTimer.singleShot(0, self.apply_pending_restore_state)
         QTimer.singleShot(0, self.optimize_columns)
 
     def apply_pending_restore_state(self):
         if self._dispose_prepared:
             return
-        if self._pending_restore_selection:
-            first_path = self._pending_restore_selection[0]
-            index = self.model.index(first_path)
-            if index.isValid():
-                adapter = self.active_view_adapter()
-                if adapter is not None:
-                    adapter.select_single_index(index, focus=False)
-
-        active_view = self.active_item_view()
-        scrollbar = active_view.verticalScrollBar() if active_view is not None else None
-        if scrollbar:
-            scrollbar.setValue(self._pending_restore_scroll)
-
-        self._pending_restore_selection = []
-        self._pending_restore_scroll = 0
+        self._selection_restore_service.consume(
+            index_for_path=self._restore_index_for_path,
+            select_index=self._restore_select_index,
+            set_scroll_value=self._restore_scroll_value,
+        )
 
     def on_tree_double_click(self, index):
         if not index.isValid():
@@ -3336,13 +3312,21 @@ class PaneController(QObject):
                 new_state = self.tab_states[new_index]
                 new_state.view_mode = active_state.view_mode
                 new_state.icon_zoom_percent = active_state.icon_zoom_percent
-                if push_history and active_state.path:
-                    new_state.history.append(active_state.path)
+                new_state.history = self._history_service.record_navigation(
+                    new_state.history,
+                    active_state.path,
+                    target_path,
+                    push_history,
+                )
                 self.tab_bar.setCurrentIndex(new_index)
             return
 
-        if push_history and target_path != active_state.path:
-            active_state.history.append(active_state.path)
+        active_state.history = self._history_service.record_navigation(
+            active_state.history,
+            active_state.path,
+            target_path,
+            push_history,
+        )
 
         active_state.path = target_path
         self.current_directory = target_path
@@ -3370,10 +3354,12 @@ class PaneController(QObject):
 
     def navigate_back(self):
         active_state = self.get_active_tab_state()
-        if not active_state or not active_state.history:
+        if not active_state:
             return
-
-        previous_path = active_state.history.pop()
+        history, previous_path = self._history_service.pop_previous(active_state.history)
+        if previous_path is None:
+            return
+        active_state.history = history
         self.navigate_to(previous_path, push_history=False)
 
     def navigate_up(self):
@@ -3387,7 +3373,7 @@ class PaneController(QObject):
 
     def can_go_back(self):
         active_state = self.get_active_tab_state()
-        return bool(active_state and active_state.history)
+        return bool(active_state and self._history_service.can_go_back(active_state.history))
 
     def can_go_up(self):
         current_location = self._resolve_local_location(self.current_directory)
@@ -3590,19 +3576,7 @@ class PaneController(QObject):
         self.capture_tab_state(self.active_tab_index)
         return {
             "active_tab_index": self.active_tab_index,
-            "tabs": [
-                {
-                    "title": state.title,
-                    "path": state.path,
-                    "pinned": state.pinned,
-                    "view_mode": state.view_mode,
-                    "icon_zoom_percent": state.icon_zoom_percent,
-                    "history": list(state.history),
-                    "scroll_value": state.scroll_value,
-                    "selected_paths": list(state.selected_paths),
-                }
-                for state in self.tab_states
-            ],
+            "tabs": self._pane_state_service.serialize_states(self.tab_states),
         }
 
     def export_active_tab_state(self):
@@ -3613,18 +3587,7 @@ class PaneController(QObject):
 
         return {
             "active_tab_index": 0,
-            "tabs": [
-                {
-                    "title": active_state.title,
-                    "path": active_state.path,
-                    "pinned": active_state.pinned,
-                    "view_mode": active_state.view_mode,
-                    "icon_zoom_percent": active_state.icon_zoom_percent,
-                    "history": list(active_state.history),
-                    "scroll_value": active_state.scroll_value,
-                    "selected_paths": list(active_state.selected_paths),
-                }
-            ],
+            "tabs": [self._pane_state_service.serialize_state(active_state)],
         }
 
     def import_state(self, state_data):
@@ -3635,57 +3598,7 @@ class PaneController(QObject):
         if not isinstance(raw_tabs, list) or not raw_tabs:
             return
 
-        restored_states: list[TabState] = []
-        for tab in raw_tabs:
-            if not isinstance(tab, dict):
-                continue
-
-            path = QDir.cleanPath(str(tab.get("path") or QDir.homePath()))
-            if not QDir(path).exists():
-                path = QDir.homePath()
-
-            title = str(tab.get("title") or (Path(path).name or path))
-            view_mode = str(tab.get("view_mode") or "details")
-            if view_mode not in {"details", "list", "icons"}:
-                view_mode = "details"
-
-            raw_zoom = tab.get("icon_zoom_percent", 100)
-            try:
-                icon_zoom_percent = int(raw_zoom)
-            except (TypeError, ValueError):
-                icon_zoom_percent = 100
-            icon_zoom_percent = max(50, min(300, icon_zoom_percent))
-
-            history = tab.get("history")
-            clean_history = []
-            if isinstance(history, list):
-                for item in history:
-                    clean_item = QDir.cleanPath(str(item))
-                    if QDir(clean_item).exists():
-                        clean_history.append(clean_item)
-
-            selected_paths = tab.get("selected_paths")
-            clean_selected = []
-            if isinstance(selected_paths, list):
-                for item in selected_paths:
-                    clean_item = QDir.cleanPath(str(item))
-                    if QDir(clean_item).exists():
-                        clean_selected.append(clean_item)
-
-            scroll_value = int(tab.get("scroll_value") or 0)
-
-            restored_states.append(
-                TabState(
-                    title=title,
-                    path=path,
-                    pinned=bool(tab.get("pinned", False)),
-                    view_mode=view_mode,
-                    icon_zoom_percent=icon_zoom_percent,
-                    history=clean_history,
-                    scroll_value=max(0, scroll_value),
-                    selected_paths=clean_selected,
-                )
-            )
+        restored_states = self._pane_state_service.deserialize_states(raw_tabs, QDir.homePath())
 
         if not restored_states:
             return
