@@ -2,7 +2,7 @@
 Type=Application
 Name=Tablion Dateimanager
 Comment=Dateimanager mit Tabgruppen, Multi-View und smarter Dateiorganisation
-Exec=env TABLION_DISPLAY_VERSION=0.8.0-1 tablion-file-manager %U
+Exec=env TABLION_DISPLAY_VERSION=0.9.0-1 tablion-file-manager
 Icon=system-file-manager
 Terminal=false
 Categories=Utility;FileManager;

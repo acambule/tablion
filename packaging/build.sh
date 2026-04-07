@@ -28,8 +28,8 @@ python3 -m build
 
 # Kopiere aktuelle Dateien
 cp "$PROJECT_ROOT/dist/tablion_file_manager-$VERSION.tar.gz" ~/rpmbuild/SOURCES/
-sed -i "s|^Exec=.*|Exec=env TABLION_DISPLAY_VERSION=$DISPLAY_VERSION tablion-file-manager|" "$PROJECT_ROOT/build/tablion.desktop"
-cp "$PROJECT_ROOT/build/tablion.desktop" ~/rpmbuild/SOURCES/
+sed -i "s|^Exec=.*|Exec=env TABLION_DISPLAY_VERSION=$DISPLAY_VERSION tablion-file-manager|" "$PROJECT_ROOT/packaging/tablion.desktop"
+cp "$PROJECT_ROOT/packaging/tablion.desktop" ~/rpmbuild/SOURCES/
 
 cp "$SCRIPT_DIR/$SPECFILE" ~/rpmbuild/SPECS/
 
