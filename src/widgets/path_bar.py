@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from localization import app_tr
+from domain.filesystem import PaneLocation
 
 
 class PathBar(QWidget):
@@ -149,6 +150,12 @@ class PathBar(QWidget):
 
     def current_path(self):
         return self._current_path
+
+    def set_location(self, location: PaneLocation | str):
+        if isinstance(location, PaneLocation):
+            self.set_path(location.path)
+            return
+        self.set_path(str(location or ""))
 
     def set_path(self, path):
         normalized_path = self._normalize_path(path)

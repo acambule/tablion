@@ -322,7 +322,7 @@ class PaneController(QObject):
         self.setup_search_ui()
         self.set_show_hidden_files(self._show_hidden_files, persist=False, refresh=False)
 
-        self.add_tab("Tab 1", QDir.homePath())
+        self.add_tab("Tab 1", self.current_location.path)
 
     def setup_tab_bar_host(self):
         if self.tab_bar_host.layout() is None:
@@ -409,7 +409,7 @@ class PaneController(QObject):
                 return
 
             if not self._pending_root_path:
-                if QDir.cleanPath(path) == QDir.cleanPath(self.current_directory):
+                if QDir.cleanPath(path) == QDir.cleanPath(self.current_location.path):
                     self.apply_current_sort()
                     self.optimize_columns()
                 return
@@ -887,6 +887,13 @@ class PaneController(QObject):
     def _resolve_local_location(self, path) -> PaneLocation | None:
         return self._navigation_service.resolve_directory_location(str(path or ""))
 
+    def _set_current_location(self, location: PaneLocation) -> None:
+        self.current_location = location
+        self.current_directory = location.path
+
+    def _is_local_context(self) -> bool:
+        return bool(self.current_location and self.current_location.is_local)
+
     def open_path_in_new_tab(self, path, activate=True):
         location = self._resolve_local_location(path)
         if location is None:
@@ -1002,7 +1009,7 @@ class PaneController(QObject):
                 tab_index = self.tab_bar.tabAt(event.position().toPoint())
                 if tab_index == -1:
                     new_index = len(self.tab_states) + 1
-                    self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", self.current_directory)
+                    self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", self.current_location.path)
                     self.tab_bar.setCurrentIndex(len(self.tab_states) - 1)
                     return True
                 self.toggle_tab_pin(tab_index)
@@ -1046,7 +1053,7 @@ class PaneController(QObject):
                 chosen_action = menu.exec(event.globalPos())
                 if chosen_action == action_new_tab:
                     new_index = len(self.tab_states) + 1
-                    self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", self.current_directory)
+                    self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", self.current_location.path)
                     self.tab_bar.setCurrentIndex(len(self.tab_states) - 1)
                     return True
                 if chosen_action == action_close and tab_index != -1:
@@ -1383,6 +1390,8 @@ class PaneController(QObject):
                     self.view_stack.setCurrentWidget(self.tree_view)
 
     def start_recursive_search(self):
+        if not self._local_context_required(app_tr("PaneController", "Suche")):
+            return
         if self.search_line_edit is None:
             return
 
@@ -1396,11 +1405,11 @@ class PaneController(QObject):
             return
 
         self.show_operation_feedback(
-            app_tr("PaneController", "Suche in {path} gestartet").format(path=self.current_directory)
+            app_tr("PaneController", "Suche in {path} gestartet").format(path=self.current_location.path)
         )
 
         self._search_thread = QThread(self)
-        self._search_worker = RecursiveSearchWorker(self.current_directory, search_text)
+        self._search_worker = RecursiveSearchWorker(self.current_location.path, search_text)
         self._search_worker.moveToThread(self._search_thread)
         self._search_thread.started.connect(self._search_worker.run)
         self._search_worker.finished.connect(self._on_recursive_search_finished)
@@ -1534,7 +1543,17 @@ class PaneController(QObject):
         default_target = self._archive_service.default_archive_target_path(sources, suffix)
         if sources:
             return default_target
-        return str(Path(self.current_directory) / f"{app_tr('PaneController', 'Archiv')}{suffix}")
+        return str(Path(self.current_location.path) / f"{app_tr('PaneController', 'Archiv')}{suffix}")
+
+    def _local_context_required(self, action_label: str) -> bool:
+        if self._is_local_context():
+            return True
+        self.show_operation_feedback(
+            app_tr("PaneController", "{action} wird für Remote-Kontexte noch nicht unterstützt").format(
+                action=action_label
+            )
+        )
+        return False
 
     def _archive_suffix_for_filter(self, selected_filter: str) -> str:
         return self._archive_service.archive_suffix_for_filter(selected_filter, self._ARCHIVE_SAVE_FILTERS)
@@ -1635,6 +1654,8 @@ class PaneController(QObject):
         self._open_service.open_in_editor(target, preferred_editor=editor_cmd)
 
     def extract_selected_archive(self, destination: str | None = None):
+        if not self._local_context_required(app_tr("PaneController", "Entpacken")):
+            return
         archive_path = self._selected_archive_path()
         if archive_path is None:
             return
@@ -1687,6 +1708,8 @@ class PaneController(QObject):
         self.extract_selected_archive(selected_directory)
 
     def create_archive_from_selection(self):
+        if not self._local_context_required(app_tr("PaneController", "Archivierung")):
+            return
         source_paths = self._archive_creation_sources()
         if not source_paths:
             return
@@ -1801,13 +1824,14 @@ class PaneController(QObject):
         )
 
     def resolve_drop_target_directory(self, pos=None, source_view=None):
+        current_path = self.current_location.path
         if source_view is self.icon_view and self.icon_view_adapter is not None:
-            return self.icon_view_adapter.resolve_drop_target_directory(pos, self.current_directory)
+            return self.icon_view_adapter.resolve_drop_target_directory(pos, current_path)
 
         adapter = self.active_view_adapter()
         if adapter is None:
-            return QDir.cleanPath(self.current_directory)
-        return adapter.resolve_drop_target_directory(pos, self.current_directory)
+            return QDir.cleanPath(current_path)
+        return adapter.resolve_drop_target_directory(pos, current_path)
 
     def _build_file_operation_tasks(self, source_paths, target_directory, operation):
         normalized_sources = [QDir.cleanPath(str(source)) for source in source_paths]
@@ -2014,7 +2038,7 @@ class PaneController(QObject):
             return
 
         if permanent is None:
-            permanent = self._delete_service.resolve_permanent_default(self.current_directory)
+            permanent = self._delete_service.resolve_permanent_default(self.current_location.path)
 
         title, message = self._delete_service.build_confirmation(existing_selected, permanent)
         confirmed = ask_yes_no(
@@ -2271,7 +2295,7 @@ class PaneController(QObject):
 
     def on_model_file_renamed(self, directory_path, _old_name, _new_name):
         renamed_directory = QDir.cleanPath(str(directory_path))
-        current_root = QDir.cleanPath(self.current_directory)
+        current_root = QDir.cleanPath(self.current_location.path)
 
         old_path = QDir.cleanPath(QDir(renamed_directory).filePath(str(_old_name)))
         new_path = QDir.cleanPath(QDir(renamed_directory).filePath(str(_new_name)))
@@ -2281,7 +2305,7 @@ class PaneController(QObject):
 
         active_state = self.get_active_tab_state()
         if active_state is not None:
-            state_path = QDir.cleanPath(str(active_state.path))
+            state_path = QDir.cleanPath(str(active_state.location.path))
             if state_path == old_path or state_path.startswith(f"{old_path}/"):
                 suffix = state_path[len(old_path):]
                 updated_path = QDir.cleanPath(f"{new_path}{suffix}")
@@ -2291,8 +2315,7 @@ class PaneController(QObject):
                     path=updated_path,
                     remote_id=active_state.location.remote_id,
                 )
-                self.current_directory = updated_path
-                self.current_location = active_state.location
+                self._set_current_location(active_state.location)
 
                 tab_title = Path(updated_path).name or updated_path
                 active_state.title = tab_title
@@ -2301,7 +2324,7 @@ class PaneController(QObject):
                     self.update_tab_visual(self.active_tab_index)
 
                 if self.path_bar:
-                    self.path_bar.set_path(updated_path)
+                    self.path_bar.set_location(active_state.location)
 
                 self.currentPathChanged.emit(updated_path)
                 self.emit_navigation_state()
@@ -2487,7 +2510,7 @@ class PaneController(QObject):
             "}"
         )
 
-        if self._delete_service.is_trash_context(self.current_directory):
+        if self._delete_service.is_trash_context(self.current_location.path):
             delete_icon = QIcon.fromTheme("edit-delete")
             if delete_icon.isNull():
                 delete_icon = self.widget.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
@@ -2684,7 +2707,7 @@ class PaneController(QObject):
             return
 
         state = self.tab_states[tab_index]
-        path = QDir.cleanPath(state.path)
+        path = QDir.cleanPath(state.location.path)
         if not QDir(path).exists():
             return
 
@@ -2723,7 +2746,7 @@ class PaneController(QObject):
         self.tab_bar.blockSignals(False)
 
         if not self.tab_states:
-            self.add_tab("Tab 1", QDir.homePath())
+            self.add_tab("Tab 1", self.current_location.path)
             return
 
         active_index = max(0, min(active_index, len(self.tab_states) - 1))
@@ -2757,7 +2780,7 @@ class PaneController(QObject):
         scroll_value = scrollbar.value() if scrollbar else 0
         self._pane_state_service.capture_state(
             state,
-            current_path=self.current_directory,
+            current_path=self.current_location.path,
             view_mode=self.filetree_view_mode,
             icon_zoom_percent=self.icon_zoom_percent,
             selected_paths=self.selected_paths(),
@@ -2767,7 +2790,7 @@ class PaneController(QObject):
     def apply_tab_state(self, state, push_history=False):
         self.icon_zoom_percent = max(50, min(300, int(getattr(state, "icon_zoom_percent", 100))))
         self.apply_view_mode(state.view_mode)
-        self.navigate_to(state.path, push_history=push_history)
+        self.navigate_to(state.location, push_history=push_history)
 
         self._selection_restore_service.remember(state.selected_paths, state.scroll_value)
         QTimer.singleShot(0, self.apply_pending_restore_state)
@@ -2814,7 +2837,7 @@ class PaneController(QObject):
         if active_state is None:
             return
 
-        if active_state.pinned and target_path != active_state.path:
+        if active_state.pinned and location != active_state.location:
             tab_title = self._navigation_service.display_name_for_location(location)
             new_state = TabState(title=tab_title, location=location)
             self.tab_states.append(new_state)
@@ -2842,14 +2865,24 @@ class PaneController(QObject):
         )
 
         active_state.location = location
-        self.current_directory = target_path
-        self.current_location = location
+        self._set_current_location(location)
 
         tab_title = self._navigation_service.display_name_for_location(location)
         active_state.title = tab_title
         if self.active_tab_index >= 0:
             self.tab_bar.setTabText(self.active_tab_index, tab_title)
             self.update_tab_visual(self.active_tab_index)
+
+        if location.is_remote:
+            self._pending_root_path = None
+            if self.path_bar:
+                self.path_bar.set_location(location)
+            self.currentPathChanged.emit(location.path)
+            self.emit_navigation_state()
+            self.show_operation_feedback(
+                app_tr("PaneController", "Remote-Kontexte sind im Pane noch nicht aktiviert")
+            )
+            return
 
         self._pending_root_path = target_path
         root_index = self.model.setRootPath(target_path)
@@ -2861,7 +2894,7 @@ class PaneController(QObject):
                 self.icon_view.setRootIndex(index)
 
         if self.path_bar:
-            self.path_bar.set_path(target_path)
+            self.path_bar.set_location(location)
 
         self.currentPathChanged.emit(target_path)
         self.emit_navigation_state()
@@ -3070,7 +3103,7 @@ class PaneController(QObject):
                 self.model.setRootPath(QDir.rootPath())
             except RuntimeError:
                 pass
-        self.navigate_to(self.current_directory, push_history=False)
+        self.navigate_to(self.current_location, push_history=False)
         self.apply_current_sort()
         self.force_resort()
         QTimer.singleShot(150, self.apply_current_sort)
@@ -3112,7 +3145,7 @@ class PaneController(QObject):
         if not isinstance(raw_tabs, list) or not raw_tabs:
             return
 
-        restored_states = self._pane_state_service.deserialize_states(raw_tabs, QDir.homePath())
+        restored_states = self._pane_state_service.deserialize_states(raw_tabs, self.current_location.path)
 
         if not restored_states:
             return

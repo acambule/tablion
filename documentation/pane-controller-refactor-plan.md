@@ -17,7 +17,7 @@ Er soll nicht mehr selbst die Details von Navigation, Dateioperationen, Remote-Z
 - Phase 1 abgeschlossen
 - Phase 2 abgeschlossen
 - Phase 3 abgeschlossen
-- Phase 4 offen
+- Phase 4 abgeschlossen
 
 ## Aktuelle Probleme
 
@@ -140,6 +140,13 @@ Arbeitsschritte:
 
 Ergebnis:
 - `PaneController` muss nicht wissen, ob ein Ziel lokal oder remote ist
+
+Stand nach Abschluss:
+- `PaneLocation` ist der Standard in `TabState`, History und Navigation
+- `PaneController` hält `current_location` als primären Kontext und spiegelt `current_directory` nur noch zur Kompatibilität
+- PathBar wird über Kontextobjekte synchronisiert
+- State-Import und -Export unterstützen `location`-Objekte mit Fallback auf das alte `path`-Format
+- klar lokale Aktionen sind im Controller sichtbar als lokale Kontexte gekennzeichnet, statt stillschweigend auf reine Pfadannahmen zu bauen
 
 ## Phase 5: Remote-Drive-Konfiguration einführen
 
