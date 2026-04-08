@@ -2512,49 +2512,12 @@ class PaneController(QObject):
         destination = target_directory or self.resolve_drop_target_directory()
         if self.current_location is not None and self.current_location.is_remote:
             if remote_locations:
-                destination_path = QDir.cleanPath(str(destination or self.current_location.path))
-                destination_location = PaneLocation(
-                    kind="remote",
-                    path=destination_path,
-                    remote_id=self.current_location.remote_id,
+                self._paste_remote_paths_to_remote(
+                    remote_locations,
+                    destination,
+                    move=self.extract_operation_from_mime(mime_data) == "cut",
+                    clear_clipboard_on_success=True,
                 )
-                operation = self.extract_operation_from_mime(mime_data)
-                try:
-                    if operation == "cut":
-                        changed = (
-                            self._remote_drive_controller.move_items(remote_locations, destination_location)
-                            if self._remote_drive_controller is not None
-                            else []
-                        )
-                        if changed:
-                            QApplication.clipboard().clear()
-                            self.clear_cut_state()
-                            self.refresh_current_directory()
-                            self.show_operation_feedback(
-                                app_tr("PaneController", "{count} Remote-Element(e) verschoben").format(
-                                    count=len(changed)
-                                )
-                            )
-                        return
-
-                    changed = (
-                        self._remote_drive_controller.copy_items(remote_locations, destination_location)
-                        if self._remote_drive_controller is not None
-                        else []
-                    )
-                except Exception as error:
-                    QMessageBox.warning(
-                        self.widget,
-                        app_tr("PaneController", "Einfügen fehlgeschlagen"),
-                        str(error),
-                    )
-                    return
-
-                if changed:
-                    self.refresh_current_directory()
-                    self.show_operation_feedback(
-                        app_tr("PaneController", "{count} Remote-Element(e) kopiert").format(count=len(changed))
-                    )
                 return
 
             if self.extract_operation_from_mime(mime_data) == "cut":
@@ -2564,8 +2527,11 @@ class PaneController(QObject):
             return
 
         if remote_locations:
-            self.show_operation_feedback(
-                app_tr("PaneController", "Einfügen von Remote nach lokal ist noch nicht verfügbar")
+            self._paste_remote_paths_to_local(
+                remote_locations,
+                destination,
+                move=self.extract_operation_from_mime(mime_data) == "cut",
+                clear_clipboard_on_success=self.extract_operation_from_mime(mime_data) == "cut",
             )
             return
 
@@ -2606,6 +2572,110 @@ class PaneController(QObject):
         self.refresh_current_directory()
         self.show_operation_feedback(
             app_tr("PaneController", "{count} Element(e) nach Remote kopiert").format(count=len(uploaded))
+        )
+        return True
+
+    def _paste_remote_paths_to_local(
+        self,
+        remote_locations,
+        target_directory=None,
+        *,
+        move: bool = False,
+        clear_clipboard_on_success: bool = False,
+    ):
+        if self._remote_drive_controller is None:
+            return False
+
+        destination_path = QDir.cleanPath(str(target_directory or self.resolve_drop_target_directory()))
+        if not destination_path or not QDir(destination_path).exists():
+            return False
+
+        try:
+            transferred = self._remote_drive_controller.transfer_items_to_local(
+                remote_locations,
+                destination_path,
+                move=move,
+            )
+        except Exception as error:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Download fehlgeschlagen"),
+                str(error),
+            )
+            return False
+
+        if not transferred:
+            return False
+
+        self.refresh_current_directory(preserve_focus=True, force_rescan=True)
+        self.filesystemMutationCommitted.emit()
+        if move:
+            if clear_clipboard_on_success:
+                QApplication.clipboard().clear()
+                self.clear_cut_state()
+            self.show_operation_feedback(
+                app_tr("PaneController", "{count} Remote-Element(e) lokal verschoben").format(
+                    count=len(transferred)
+                )
+            )
+            return True
+
+        self.show_operation_feedback(
+            app_tr("PaneController", "{count} Remote-Element(e) lokal kopiert").format(
+                count=len(transferred)
+            )
+        )
+        return True
+
+    def _paste_remote_paths_to_remote(
+        self,
+        remote_locations,
+        target_directory=None,
+        *,
+        move: bool = False,
+        clear_clipboard_on_success: bool = False,
+    ):
+        if self.current_location is None or not self.current_location.is_remote or self._remote_drive_controller is None:
+            return False
+
+        destination_path = QDir.cleanPath(str(target_directory or self.current_location.path))
+        destination_location = PaneLocation(
+            kind="remote",
+            path=destination_path,
+            remote_id=self.current_location.remote_id,
+        )
+        try:
+            changed = (
+                self._remote_drive_controller.move_items(remote_locations, destination_location)
+                if move
+                else self._remote_drive_controller.copy_items(remote_locations, destination_location)
+            )
+        except Exception as error:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Einfügen fehlgeschlagen"),
+                str(error),
+            )
+            return False
+
+        if not changed:
+            return False
+
+        if move:
+            if clear_clipboard_on_success:
+                QApplication.clipboard().clear()
+                self.clear_cut_state()
+            self.refresh_current_directory()
+            self.show_operation_feedback(
+                app_tr("PaneController", "{count} Remote-Element(e) verschoben").format(
+                    count=len(changed)
+                )
+            )
+            return True
+
+        self.refresh_current_directory()
+        self.show_operation_feedback(
+            app_tr("PaneController", "{count} Remote-Element(e) kopiert").format(count=len(changed))
         )
         return True
 
@@ -2936,14 +3006,20 @@ class PaneController(QObject):
         if source_paths is None or target_dir is None:
             source_paths, target_dir = self.resolve_drop_context(mime_data, pos, source_widget)
         ark_reference = self.extract_ark_drop_reference(mime_data)
-        if not source_paths and ark_reference is None:
+        remote_locations = self._extract_remote_locations_from_mime(mime_data)
+        if not source_paths and not remote_locations and ark_reference is None:
             self.clear_drop_target_visual()
             return False
 
         if self.current_location is not None and self.current_location.is_remote:
             if ark_reference is not None:
                 return False
+            if remote_locations:
+                return bool(target_dir)
             return any(Path(path).exists() for path in source_paths)
+
+        if remote_locations:
+            return QDir(str(target_dir or "")).exists()
 
         return self._drop_service.can_accept_tree_drop(
             source_paths=source_paths,
@@ -2953,6 +3029,13 @@ class PaneController(QObject):
 
     def resolve_drop_action(self, event, source_paths=None, target_dir=None, mime_data=None, source_widget=None):
         if self.current_location is not None and self.current_location.is_remote:
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                return Qt.DropAction.MoveAction
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                return Qt.DropAction.CopyAction
+            remote_locations = self._extract_remote_locations_from_mime(mime_data)
+            if remote_locations and all(location.remote_id == self.current_location.remote_id for location in remote_locations):
+                return Qt.DropAction.MoveAction
             return Qt.DropAction.CopyAction
         tree_viewport = self.tree_view.viewport() if self.tree_view is not None else None
         icon_viewport = self.icon_view.viewport() if self.icon_view is not None else None
@@ -3065,13 +3148,26 @@ class PaneController(QObject):
         if source_paths is None or target_dir is None:
             source_paths, target_dir = self.resolve_drop_context(mime_data, pos, source_widget)
         ark_reference = self.extract_ark_drop_reference(mime_data)
+        remote_locations = self._extract_remote_locations_from_mime(mime_data)
         if self.current_location is not None and self.current_location.is_remote:
             if ark_reference is not None:
                 return False
+            if remote_locations:
+                return self._paste_remote_paths_to_remote(
+                    remote_locations,
+                    target_dir,
+                    move=drop_action == Qt.DropAction.MoveAction,
+                )
             local_source_paths = [path for path in source_paths if Path(path).exists()]
             if not local_source_paths:
                 return False
             return self._paste_local_paths_to_remote(local_source_paths, target_dir)
+        if remote_locations:
+            return self._paste_remote_paths_to_local(
+                remote_locations,
+                target_dir,
+                move=drop_action == Qt.DropAction.MoveAction,
+            )
         return self._drop_service.handle_tree_drop(
             source_paths=source_paths,
             target_dir=target_dir,
@@ -3376,9 +3472,11 @@ class PaneController(QObject):
         current_index = self.current_or_selected_index()
         action_rename.setEnabled(current_index.isValid() and self.selected_count() > 0)
 
-        clipboard_paths = self.extract_paths_from_mime(QApplication.clipboard().mimeData())
+        clipboard_mime = QApplication.clipboard().mimeData()
+        clipboard_paths = self.extract_paths_from_mime(clipboard_mime)
+        remote_clipboard_locations = self._extract_remote_locations_from_mime(clipboard_mime)
         action_paste.setEnabled(
-            bool(clipboard_paths)
+            bool(clipboard_paths or remote_clipboard_locations)
             and (
                 (self.current_location is not None and self.current_location.is_remote)
                 or QDir(destination_dir).exists()

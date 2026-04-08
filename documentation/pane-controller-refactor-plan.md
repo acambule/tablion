@@ -219,16 +219,17 @@ Stand nach aktuellem Ausbau:
 - `rename`, `delete`, `mkdir` sind für Remote implementiert
 - `new file` ist für Remote implementiert
 - `copy local -> remote` funktioniert über `Einfügen` und Drag'n'Drop
+- `copy remote -> local` funktioniert über `Einfügen` und Drag'n'Drop
+- `move remote -> local` funktioniert über `Einfügen` und Drag'n'Drop
 - `copy remote -> remote` innerhalb desselben Remote-Eintrags ist implementiert
 - `move remote -> remote` innerhalb desselben Remote-Eintrags ist implementiert
+- internes `remote -> remote` Drag'n'Drop innerhalb desselben Remote-Eintrags ist implementiert
 - `duplicate` ist für Remote implementiert
 - `copy`, `cut`, `paste`, `rename`, `delete`, `new folder`, `new file`, `duplicate` sind im Remote-Kontextmenü vorhanden
 
 Noch offen in Phase 7:
-- `remote -> local` als echter Transferpfad
 - `remote -> anderer remote mount`
 - `local cut -> remote` als echtes Verschieben
-- internes Remote-Drag'n'Drop
 - robustere Konfliktstrategien und bessere Fortschrittsanzeige für Remote-Transfers
 - SharePoint-/Team-Auswahl fachlich weiter ausbauen
 

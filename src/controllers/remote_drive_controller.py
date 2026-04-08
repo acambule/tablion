@@ -289,6 +289,35 @@ class RemoteDriveController:
             uploaded.append(self._upload_local_path(source_path, destination))
         return uploaded
 
+    def transfer_items_to_local(
+        self,
+        locations: list[PaneLocation],
+        destination_directory: str | Path,
+        *,
+        move: bool = False,
+    ) -> list[Path]:
+        target_root = Path(destination_directory).expanduser().resolve()
+        if target_root.exists() and not target_root.is_dir():
+            raise OneDriveAuthError("Das lokale Ziel ist kein Ordner.")
+        target_root.mkdir(parents=True, exist_ok=True)
+
+        transferred: list[Path] = []
+        for location in locations:
+            if not location.is_remote:
+                continue
+            target_name = PurePosixPath(str(location.path or "/")).name.strip()
+            if not target_name:
+                continue
+
+            target_path = self._next_available_local_path(target_root, target_name)
+            self._download_remote_path(location, target_path)
+            transferred.append(target_path)
+
+            if move:
+                self.delete_items([location])
+
+        return transferred
+
     def download_file_to_cache(self, location: PaneLocation) -> Path:
         if not location.is_remote:
             raise OneDriveAuthError("Es wurde keine Remote-Datei übergeben.")
@@ -411,6 +440,38 @@ class RemoteDriveController:
             remote_id=destination.remote_id,
         )
 
+    def _download_remote_path(self, location: PaneLocation, target_path: Path) -> Path:
+        mount = self._mount_by_id(location.remote_id)
+        if mount is None:
+            raise OneDriveAuthError("Remote-Eintrag wurde nicht gefunden.")
+        connection = self._ensure_connection_for_mount(mount)
+        drive_id = mount.drive_id or connection.drive_id
+        if not drive_id:
+            raise OneDriveAuthError("Für den Remote-Eintrag ist keine Drive-ID hinterlegt.")
+
+        graph_path = self._join_mount_path(mount.root_path, location.path)
+        item = self._onedrive_client.get_item(
+            access_token=connection.access_token,
+            drive_id=drive_id,
+            item_path=graph_path,
+        )
+        is_directory = isinstance(item.get("folder"), dict)
+
+        if is_directory:
+            target_path.mkdir(parents=True, exist_ok=False)
+            for child in self.list_directory(location):
+                self._download_remote_path(child.location, target_path / child.name)
+            return target_path
+
+        file_bytes = self._onedrive_client.download_file(
+            access_token=connection.access_token,
+            drive_id=drive_id,
+            item_path=graph_path,
+        )
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(file_bytes)
+        return target_path
+
     def _next_available_name(self, destination: PaneLocation, desired_name: str) -> str:
         clean_name = str(desired_name or "").strip() or "Element"
         try:
@@ -431,6 +492,24 @@ class RemoteDriveController:
             candidate = f"{stem} {counter}{suffix}"
             if candidate.casefold() not in existing_names:
                 return candidate
+            counter += 1
+
+    def _next_available_local_path(self, destination_directory: Path, desired_name: str) -> Path:
+        clean_name = str(desired_name or "").strip() or "Element"
+        candidate = destination_directory / clean_name
+        if not candidate.exists():
+            return candidate
+
+        suffixes = PurePosixPath(clean_name).suffixes
+        suffix = "".join(suffixes)
+        stem = clean_name[: -len(suffix)] if suffix else clean_name
+        stem = stem or clean_name
+
+        counter = 2
+        while True:
+            next_candidate = destination_directory / f"{stem} {counter}{suffix}"
+            if not next_candidate.exists():
+                return next_candidate
             counter += 1
 
     def _parse_datetime(self, value) -> datetime | None:

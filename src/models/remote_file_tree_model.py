@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QModelIndex, Qt
+from PySide6.QtCore import QModelIndex, QMimeData, Qt
 from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel
 
 from localization import app_tr
@@ -22,6 +23,7 @@ class RemoteFileItem:
 
 
 class RemoteFileTreeModel(QStandardItemModel):
+    REMOTE_CLIPBOARD_MIME_TYPE = "application/x-tablion-remote-locations"
     ROLE_PATH = Qt.ItemDataRole.UserRole + 100
     ROLE_IS_DIR = Qt.ItemDataRole.UserRole + 101
     ROLE_WEB_URL = Qt.ItemDataRole.UserRole + 102
@@ -76,6 +78,39 @@ class RemoteFileTreeModel(QStandardItemModel):
 
     def currentLocation(self) -> PaneLocation:
         return self._current_location
+
+    def mimeTypes(self) -> list[str]:
+        mime_types = list(super().mimeTypes())
+        if self.REMOTE_CLIPBOARD_MIME_TYPE not in mime_types:
+            mime_types.append(self.REMOTE_CLIPBOARD_MIME_TYPE)
+        return mime_types
+
+    def mimeData(self, indexes) -> QMimeData | None:
+        mime_data = super().mimeData(indexes)
+        if mime_data is None:
+            mime_data = QMimeData()
+
+        payload: list[dict[str, str]] = []
+        seen_paths: set[str] = set()
+        for index in indexes:
+            if not index.isValid() or index.column() != 0:
+                continue
+
+            path = str(index.data(self.ROLE_PATH) or "").strip()
+            if not path or path in seen_paths or path == "/":
+                continue
+            seen_paths.add(path)
+            payload.append(
+                {
+                    "kind": "remote",
+                    "path": path,
+                    "remote_id": str(self._current_location.remote_id or ""),
+                }
+            )
+
+        if payload:
+            mime_data.setData(self.REMOTE_CLIPBOARD_MIME_TYPE, json.dumps(payload).encode("utf-8"))
+        return mime_data
 
     def _update_headers(self) -> None:
         self.setHorizontalHeaderLabels(
