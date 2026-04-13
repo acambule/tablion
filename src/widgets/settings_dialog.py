@@ -1292,6 +1292,22 @@ class SettingsDialog(QDialog):
             return True
         return False
 
+    def focus_remote_clouds(self) -> bool:
+        if self._categories_list is None or self._category_stack is None:
+            return False
+
+        remote_page_index = self._category_stack.indexOf(self._remote_clouds_page) if self._remote_clouds_page is not None else -1
+        if remote_page_index < 0:
+            return False
+
+        self._categories_list.setCurrentRow(remote_page_index)
+        self._category_stack.setCurrentIndex(remote_page_index)
+        if self._remote_clouds_tabs is not None:
+            self._remote_clouds_tabs.setCurrentIndex(0)
+        self.raise_()
+        self.activateWindow()
+        return True
+
 
 def asdict_like(item) -> dict:
     return dict(item.__dict__)

@@ -60,5 +60,5 @@ install -D -m 644 %{SOURCE1} %{buildroot}%{_datadir}/applications/tablion.deskto
 %{_prefix}/resources/translations/*.qm
 
 %changelog
-* Tue Apr 07 2026 Antonio Cambule <dev@cambule.info> - 0.9.0-1
+* Wed Apr 08 2026 Antonio Cambule <dev@cambule.info> - 0.9.0-3
 - Automatisch aktualisiert

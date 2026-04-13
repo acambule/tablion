@@ -3,9 +3,9 @@ import json
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QModelIndex, QStandardPaths, QEvent, QObject, QSize, Signal
+from PySide6.QtCore import Qt, QModelIndex, QStandardPaths, QEvent, QObject, QSize, Signal, QRect
 from PySide6.QtGui import QColor, QIcon, QPen
-from PySide6.QtWidgets import QApplication, QAbstractItemView, QHeaderView, QStyle, QStyledItemDelegate, QTreeWidget, QTreeWidgetItem, QMenu, QInputDialog, QLineEdit
+from PySide6.QtWidgets import QApplication, QAbstractItemView, QHeaderView, QStyle, QStyledItemDelegate, QTreeWidget, QTreeWidgetItem, QMenu, QInputDialog, QLineEdit, QWidgetAction, QCheckBox
 
 from localization import app_tr
 from domain.filesystem import PaneLocation
@@ -69,11 +69,14 @@ class NavigatorDropIndicatorDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         super().paint(painter, option, index)
 
+        current_item = self.manager.widget.itemFromIndex(index)
+        if current_item is not None:
+            self.manager.paint_group_action_icon(painter, option, current_item)
+
         indicator_item = self.manager._drop_indicator_item
         if indicator_item is None:
             return
 
-        current_item = self.manager.widget.itemFromIndex(index)
         if current_item is not indicator_item:
             return
 
@@ -89,6 +92,7 @@ class NavigatorDropIndicatorDelegate(QStyledItemDelegate):
 class NavigatorManager(QObject):
     entryMiddleClicked = Signal(object)
     remoteMountEditRequested = Signal(str)
+    remoteCloudSettingsRequested = Signal()
 
     def __init__(self, widget: QTreeWidget, data_path: Path, remote_mount_settings=None, remote_connection_settings=None):
         super().__init__(widget)
@@ -156,6 +160,10 @@ class NavigatorManager(QObject):
     def eventFilter(self, watched, event):
         try:
             if watched == self.widget.viewport():
+                if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                    if self.handle_group_action_click(event.position().toPoint()):
+                        return True
+
                 if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.MiddleButton:
                     item = self.widget.itemAt(event.position().toPoint())
                     location = self.get_entry_location(item) if item is not None else None
@@ -164,12 +172,20 @@ class NavigatorManager(QObject):
                         return True
 
                 if event.type() == QEvent.Type.DragEnter:
+                    if self.can_handle_internal_custom_drop(event):
+                        self.update_drop_indicator(event.position().toPoint())
+                        event.acceptProposedAction()
+                        return True
                     if self.can_handle_external_folder_drop(event):
                         self.update_drop_indicator(event.position().toPoint())
                         event.acceptProposedAction()
                         return True
 
                 if event.type() == QEvent.Type.DragMove:
+                    if self.can_handle_internal_custom_drop(event):
+                        self.update_drop_indicator(event.position().toPoint())
+                        event.acceptProposedAction()
+                        return True
                     if self.can_handle_external_folder_drop(event):
                         self.update_drop_indicator(event.position().toPoint())
                         event.acceptProposedAction()
@@ -182,6 +198,8 @@ class NavigatorManager(QObject):
 
                 if event.type() == QEvent.Type.Drop:
                     try:
+                        if self.handle_internal_custom_drop(event):
+                            return True
                         if self.handle_external_folder_drop(event):
                             return True
                     finally:
@@ -263,6 +281,74 @@ class NavigatorManager(QObject):
         target_group, _ = self.resolve_drop_target_position(event.position().toPoint())
         return target_group is not None
 
+    def can_handle_internal_custom_drop(self, event):
+        if event.source() is not self.widget:
+            return False
+        dragged_items = self._selected_custom_drag_items()
+        if not dragged_items:
+            return False
+
+        target_group, insert_row = self.resolve_drop_target_position(event.position().toPoint())
+        if target_group is None:
+            return False
+
+        source_group = dragged_items[0].parent()
+        if source_group is None or target_group is not source_group:
+            return False
+
+        minimum_row = self._minimum_custom_insert_row(source_group)
+        return insert_row >= minimum_row
+
+    def handle_internal_custom_drop(self, event):
+        if event.source() is not self.widget:
+            return False
+        dragged_items = self._selected_custom_drag_items()
+        if not dragged_items:
+            return False
+
+        target_group, insert_row = self.resolve_drop_target_position(event.position().toPoint())
+        if target_group is None:
+            return False
+
+        source_group = dragged_items[0].parent()
+        if source_group is None or target_group is not source_group:
+            event.ignore()
+            return True
+
+        minimum_row = self._minimum_custom_insert_row(source_group)
+        if insert_row < minimum_row:
+            event.ignore()
+            return True
+
+        dragged_paths = [os.path.normpath(str(item.data(0, ROLE_PATH))) for item in dragged_items if item.data(0, ROLE_PATH)]
+        if not dragged_paths:
+            event.ignore()
+            return True
+
+        custom_insert_index = 0
+        for row in range(0, min(insert_row, target_group.childCount())):
+            child = target_group.child(row)
+            if child.data(0, ROLE_KIND) != 'entry':
+                continue
+            if str(child.data(0, ROLE_ENTRY_SOURCE) or 'system').strip() != 'custom':
+                continue
+            child_path = child.data(0, ROLE_PATH)
+            if child_path and os.path.normpath(str(child_path)) in dragged_paths:
+                continue
+            custom_insert_index += 1
+
+        if not self._reorder_custom_entries_in_group(target_group, dragged_paths, custom_insert_index):
+            event.ignore()
+            return True
+
+        group_name = self._normalize_group_name(target_group.data(0, ROLE_GROUP_NAME) or target_group.text(0) or '')
+        self.loaded_data = self.load_data()
+        self.widget.clear()
+        self.build_from_data(self.loaded_data)
+        self._expand_group_by_name(group_name)
+        event.acceptProposedAction()
+        return True
+
     def handle_external_folder_drop(self, event):
         paths = self.extract_local_directory_paths(event)
         if not paths:
@@ -277,14 +363,113 @@ class NavigatorManager(QObject):
             event.ignore()
             return True
 
+        group_name = self._normalize_group_name(target_group.data(0, ROLE_GROUP_NAME) or target_group.text(0) or '')
         target_group.setExpanded(True)
         self.save_current_state()
+        self.loaded_data = self.load_data()
+        self.widget.clear()
+        self.build_from_data(self.loaded_data)
+        if group_name:
+            for top_index in range(self.widget.topLevelItemCount()):
+                candidate = self.widget.topLevelItem(top_index)
+                candidate_name = self._normalize_group_name(candidate.data(0, ROLE_GROUP_NAME) or candidate.text(0) or '')
+                if candidate_name == group_name:
+                    candidate.setExpanded(True)
+                    break
         event.acceptProposedAction()
         return True
 
     def resolve_drop_target_group(self, pos):
         group_item, _ = self.resolve_drop_target_position(pos)
         return group_item
+
+    def _selected_custom_drag_items(self):
+        selected_items = list(self.widget.selectedItems())
+        if not selected_items:
+            return []
+
+        custom_items = []
+        group_item = None
+        for item in selected_items:
+            if item.data(0, ROLE_KIND) != 'entry':
+                return []
+            if str(item.data(0, ROLE_ENTRY_SOURCE) or 'system').strip() != 'custom':
+                return []
+            parent = item.parent()
+            if parent is None:
+                return []
+            if group_item is None:
+                group_item = parent
+            elif parent is not group_item:
+                return []
+            custom_items.append(item)
+        return custom_items
+
+    def _minimum_custom_insert_row(self, group_item):
+        if group_item is None:
+            return 0
+        group_name = self._normalize_group_name(group_item.data(0, ROLE_GROUP_NAME) or group_item.text(0) or '')
+        if group_name != 'Places':
+            return 0
+
+        for row in range(group_item.childCount()):
+            child = group_item.child(row)
+            if child.data(0, ROLE_KIND) == 'separator':
+                return row + 1
+            if child.data(0, ROLE_KIND) == 'entry' and str(child.data(0, ROLE_ENTRY_SOURCE) or 'system').strip() == 'custom':
+                return row
+        return group_item.childCount()
+
+    def _reorder_custom_entries_in_group(self, group_item, dragged_paths, custom_insert_index):
+        group_name = self._normalize_group_name(group_item.data(0, ROLE_GROUP_NAME) or group_item.text(0) or '')
+        groups = self.loaded_data.get('groups', []) if isinstance(self.loaded_data, dict) else []
+        target_group = next((group for group in groups if self._normalize_group_name(group.get('name', '')) == group_name), None)
+        if not isinstance(target_group, dict):
+            return False
+
+        entries = target_group.get('entries', [])
+        if not isinstance(entries, list):
+            return False
+
+        system_entries = []
+        custom_entries = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get('source', 'system')).strip() == 'custom':
+                custom_entries.append(copy.deepcopy(entry))
+            else:
+                system_entries.append(copy.deepcopy(entry))
+
+        moving_entries = []
+        remaining_entries = []
+        dragged_path_set = set(dragged_paths)
+        for entry in custom_entries:
+            entry_path = os.path.normpath(os.path.expanduser(str(entry.get('path') or '')))
+            if entry_path in dragged_path_set:
+                moving_entries.append(entry)
+            else:
+                remaining_entries.append(entry)
+
+        if not moving_entries:
+            return False
+
+        insert_index = max(0, min(custom_insert_index, len(remaining_entries)))
+        reordered_custom_entries = list(remaining_entries)
+        reordered_custom_entries[insert_index:insert_index] = moving_entries
+        target_group['entries'] = system_entries + reordered_custom_entries
+        self.save_data(self.loaded_data)
+        return True
+
+    def _expand_group_by_name(self, group_name):
+        if not group_name:
+            return
+        for top_index in range(self.widget.topLevelItemCount()):
+            candidate = self.widget.topLevelItem(top_index)
+            candidate_name = self._normalize_group_name(candidate.data(0, ROLE_GROUP_NAME) or candidate.text(0) or '')
+            if candidate_name == group_name:
+                candidate.setExpanded(True)
+                return
 
     def extract_local_directory_paths(self, event):
         mime_data = event.mimeData()
@@ -433,6 +618,8 @@ class NavigatorManager(QObject):
             dynamic_mode = group.get('dynamic', '')
             if dynamic_mode == 'system-drives':
                 entries = self.get_system_drive_entries()
+            elif canonical_group_name == 'Places':
+                entries = self._group_entries_with_system_defaults('Places')
             else:
                 entries = group.get('entries', [])
 
@@ -454,10 +641,13 @@ class NavigatorManager(QObject):
                     else:
                         system_entries.append(entry)
 
-                entries = list(system_entries)
-                if custom_entries:
+                visible_system_entries = [entry for entry in system_entries if entry.get('active', True)]
+                visible_custom_entries = [entry for entry in custom_entries if entry.get('active', True)]
+
+                entries = list(visible_system_entries)
+                if visible_system_entries and visible_custom_entries:
                     entries.append({'type': 'separator', 'label': '────────────', 'id': 'separator:orte-custom'})
-                    entries.extend(custom_entries)
+                entries.extend(visible_custom_entries)
 
             for entry_index, entry in enumerate(entries):
                 entry_type = entry.get('type', 'entry')
@@ -469,11 +659,7 @@ class NavigatorManager(QObject):
                     separator_item.setData(0, ROLE_KIND, 'separator')
                     separator_item.setData(0, ROLE_ENTRY_TYPE, 'separator')
                     separator_item.setData(0, ROLE_ENTRY_KEY, entry_key)
-                    separator_flags = separator_item.flags()
-                    separator_flags |= Qt.ItemFlag.ItemIsSelectable
-                    separator_flags |= Qt.ItemFlag.ItemIsDragEnabled
-                    separator_flags &= ~Qt.ItemFlag.ItemIsDropEnabled
-                    separator_item.setFlags(separator_flags)
+                    separator_item.setFlags(Qt.ItemFlag.NoItemFlags)
                     group_item.addChild(separator_item)
                     continue
 
@@ -633,7 +819,7 @@ class NavigatorManager(QObject):
         self.save_data(self.serialize())
 
     def on_context_menu_requested(self, pos):
-        item = self.widget.itemAt(pos)
+        item = self._context_menu_item_at(pos)
         if item is None:
             return
 
@@ -683,6 +869,8 @@ class NavigatorManager(QObject):
 
         if kind == 'group':
             group_name = self._normalize_group_name(item.data(0, ROLE_GROUP_NAME) or item.text(0) or '')
+            if group_name == 'Places':
+                return
             inactive_entries = self.get_inactive_system_entries(group_name)
             if not inactive_entries:
                 return
@@ -696,13 +884,6 @@ class NavigatorManager(QObject):
                 "}"
             )
             activate_actions = {}
-            show_all_action = None
-            if group_name == 'Places':
-                show_all_action = activate_submenu.addAction(
-                    self.resolve_icon('view-visible', QStyle.StandardPixmap.SP_DialogApplyButton),
-                    app_tr('NavigatorManager', 'Alle einblenden'),
-                )
-                activate_submenu.addSeparator()
             for entry in inactive_entries:
                 action = activate_submenu.addAction(
                     self.resolve_icon(entry.get('icon', ''), QStyle.StandardPixmap.SP_DirIcon),
@@ -711,15 +892,118 @@ class NavigatorManager(QObject):
                 activate_actions[action] = entry['key']
 
             chosen = menu.exec(self.widget.viewport().mapToGlobal(pos))
-            if show_all_action is not None and chosen == show_all_action:
-                self.set_multiple_system_entries_active_by_keys(
-                    group_name,
-                    [entry['key'] for entry in inactive_entries],
-                    True,
-                )
-                return
             if chosen in activate_actions:
                 self.set_system_entry_active_by_key(group_name, activate_actions[chosen], True)
+
+    def paint_group_action_icon(self, painter, option, item):
+        if not self.group_has_action_icon(item):
+            return
+
+        icon = self.resolve_icon('settings-configure', QStyle.StandardPixmap.SP_FileDialogDetailedView)
+        if icon.isNull():
+            return
+
+        icon_rect = self.group_action_icon_rect(item)
+        if not icon_rect.isValid():
+            return
+        if not option.rect.intersects(icon_rect):
+            return
+
+        icon.paint(painter, icon_rect)
+
+    def group_has_action_icon(self, item):
+        if item is None:
+            return False
+        if item.data(0, ROLE_KIND) != 'group':
+            return False
+        group_name = self._normalize_group_name(item.data(0, ROLE_GROUP_NAME) or item.text(0) or '')
+        return group_name in {'Places', 'Cloud'}
+
+    def group_action_icon_rect(self, item):
+        if not self.group_has_action_icon(item):
+            return self.widget.visualItemRect(item)
+
+        rect = self.widget.visualItemRect(item)
+        if not rect.isValid():
+            return rect
+
+        size = max(14, min(18, rect.height() - 6))
+        margin = 8
+        x = rect.right() - size - margin
+        y = rect.top() + max(0, (rect.height() - size) // 2)
+        return QRect(x, y, size, size)
+
+    def handle_group_action_click(self, pos):
+        item = self._context_menu_item_at(pos)
+        if item is None or not self.group_has_action_icon(item):
+            return False
+
+        icon_rect = self.group_action_icon_rect(item)
+        if not icon_rect.contains(pos):
+            return False
+
+        group_name = self._normalize_group_name(item.data(0, ROLE_GROUP_NAME) or item.text(0) or '')
+        if group_name == 'Cloud':
+            self.remoteCloudSettingsRequested.emit()
+            return True
+
+        menu = QMenu(self.widget)
+        self.show_places_group_context_menu(menu, pos)
+        return True
+
+    def _context_menu_item_at(self, pos):
+        item = self.widget.itemAt(pos)
+        if item is not None:
+            return item
+
+        # Group rows are visually wider than the item's text hitbox. Resolve by row as fallback.
+        for top_index in range(self.widget.topLevelItemCount()):
+            top_item = self.widget.topLevelItem(top_index)
+            for candidate in self._iter_item_rows(top_item):
+                rect = self.widget.visualItemRect(candidate)
+                if rect.isValid() and rect.top() <= pos.y() <= rect.bottom():
+                    return candidate
+        return None
+
+    def _iter_item_rows(self, item):
+        if item is None:
+            return
+        yield item
+        for child_index in range(item.childCount()):
+            child = item.child(child_index)
+            yield from self._iter_item_rows(child)
+
+    def show_places_group_context_menu(self, menu, pos):
+        all_entries = self.get_all_system_entries("Places")
+        if not all_entries:
+            return False
+
+        all_active = all(bool(entry.get('active', True)) for entry in all_entries)
+        activate_all_action = menu.addAction(
+            self.resolve_icon('view-visible', QStyle.StandardPixmap.SP_DialogApplyButton),
+            app_tr('NavigatorManager', 'Alle ausblenden' if all_active else 'Alle einblenden'),
+        )
+        menu.addSeparator()
+
+        for entry in all_entries:
+            checkbox = QCheckBox(app_tr('NavigatorManager', self._canonical_system_label('', entry.get('label', ''))), menu)
+            checkbox.setChecked(bool(entry.get('active', True)))
+            checkbox.stateChanged.connect(
+                lambda state, key=entry.get('key', ''): self.set_system_entry_active_by_key("Places", key, state == Qt.CheckState.Checked.value)
+            )
+            action = QWidgetAction(menu)
+            action.setDefaultWidget(checkbox)
+            menu.addAction(action)
+
+        chosen = menu.exec(self.widget.viewport().mapToGlobal(pos))
+        if chosen == activate_all_action:
+            self.set_multiple_system_entries_active_by_keys(
+                "Places",
+                [entry['key'] for entry in all_entries],
+                not all_active,
+            )
+            return True
+        return chosen is not None
 
     def is_in_dynamic_group(self, item):
         kind = item.data(0, ROLE_KIND)
@@ -747,6 +1031,8 @@ class NavigatorManager(QObject):
         parent.takeChild(index)
         self.save_current_state()
         self.loaded_data = self.load_data()
+        self.widget.clear()
+        self.build_from_data(self.loaded_data)
 
     def rename_custom_entry(self, item):
         current_name = (item.text(0) or '').strip() or 'Favorit'
@@ -852,40 +1138,86 @@ class NavigatorManager(QObject):
         self.build_from_data(self.loaded_data)
 
     def get_inactive_system_entries(self, group_name):
-        group_name = self._normalize_group_name(group_name)
-        groups = self.loaded_data.get('groups', []) if isinstance(self.loaded_data, dict) else []
-        for group in groups:
-            if self._normalize_group_name(group.get('name', '')) != group_name:
+        result = []
+        for entry in self.get_all_system_entries(group_name):
+            if entry.get('active', True):
                 continue
+            result.append(
+                {
+                    'label': entry.get('label', ''),
+                    'key': entry.get('key', ''),
+                    'icon': entry.get('icon', ''),
+                }
+            )
+        return result
 
-            entries = group.get('entries', [])
-            if not isinstance(entries, list):
-                return []
+    def get_all_system_entries(self, group_name):
+        entries = self._group_entries_with_system_defaults(group_name)
+        result = []
+        for idx, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get('type') == 'separator':
+                continue
+            source = str(entry.get('source', 'system')).strip()
+            if source != 'system':
+                continue
+            result.append(
+                {
+                    'label': self._canonical_system_label(entry.get('dynamic', ''), entry.get('label') or ''),
+                    'key': self.build_entry_key(entry, idx),
+                    'icon': entry.get('icon', ''),
+                    'active': bool(entry.get('active', True)),
+                }
+            )
+        return result
 
-            result = []
-            for idx, entry in enumerate(entries):
-                if not isinstance(entry, dict):
-                    continue
-                if entry.get('type') == 'separator':
-                    continue
+    def _group_entries_with_system_defaults(self, group_name):
+        group_name = self._normalize_group_name(group_name)
+        default_groups = DEFAULT_NAVIGATOR_DATA.get('groups', []) if isinstance(DEFAULT_NAVIGATOR_DATA, dict) else []
+        loaded_groups = self.loaded_data.get('groups', []) if isinstance(self.loaded_data, dict) else []
 
-                source = str(entry.get('source', 'system')).strip()
-                if source != 'system':
-                    continue
-                if entry.get('active', True):
-                    continue
+        default_group = next(
+            (group for group in default_groups if self._normalize_group_name(group.get('name', '')) == group_name),
+            None,
+        )
+        loaded_group = next(
+            (group for group in loaded_groups if self._normalize_group_name(group.get('name', '')) == group_name),
+            None,
+        )
 
-                label = self._canonical_system_label(entry.get('dynamic', ''), entry.get('label') or '')
-                result.append(
-                    {
-                        'label': label,
-                        'key': self.build_entry_key(entry, idx),
-                        'icon': entry.get('icon', ''),
-                    }
-                )
-            return result
+        default_entries = list(default_group.get('entries', [])) if isinstance(default_group, dict) else []
+        loaded_entries = list(loaded_group.get('entries', [])) if isinstance(loaded_group, dict) else []
+        if not default_entries and loaded_entries:
+            return loaded_entries
 
-        return []
+        loaded_system_by_key = {}
+        loaded_custom_entries = []
+        for idx, entry in enumerate(loaded_entries):
+            if not isinstance(entry, dict):
+                continue
+            source = str(entry.get('source', 'system')).strip()
+            if source == 'custom':
+                loaded_custom_entries.append(copy.deepcopy(entry))
+                continue
+            key = self.build_entry_key(entry, idx)
+            loaded_system_by_key[key] = entry
+
+        merged_entries = []
+        for idx, entry in enumerate(default_entries):
+            if not isinstance(entry, dict):
+                continue
+            merged = copy.deepcopy(entry)
+            key = self.build_entry_key(entry, idx)
+            loaded_entry = loaded_system_by_key.get(key)
+            if isinstance(loaded_entry, dict):
+                for field in ('active', 'icon', 'label', 'path'):
+                    if field in loaded_entry:
+                        merged[field] = loaded_entry[field]
+            merged_entries.append(merged)
+
+        merged_entries.extend(loaded_custom_entries)
+        return merged_entries
 
     def get_entry_path(self, item: QTreeWidgetItem):
         if item.data(0, ROLE_KIND) != 'entry':
@@ -969,6 +1301,8 @@ class NavigatorManager(QObject):
         else:
             return entry
 
+        return dynamic_entry
+
     def _remote_entries(self):
         if self.remote_mount_settings is None:
             return []
@@ -978,8 +1312,6 @@ class NavigatorManager(QObject):
             return list(self.remote_mount_settings.build_navigator_entries(self.remote_connection_settings))
         except Exception:
             return []
-
-        return dynamic_entry
 
     def build_entry_key(self, entry, entry_index):
         entry_type = entry.get('type', 'entry')

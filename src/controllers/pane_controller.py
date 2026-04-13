@@ -1,4 +1,3 @@
-import json
 import os
 import shlex
 from pathlib import Path
@@ -37,6 +36,16 @@ from services.file_actions import (
     OpenService,
     TransferService,
     TrashRestoreService,
+)
+from services.dragdrop import (
+    DragDropContext,
+    DragMimeCodec,
+    DragPayload,
+    DragSessionService,
+    DragVisualService,
+    DropExecutionService,
+    DropTargetService,
+    RemoteDragGuard,
 )
 from services.navigation import HistoryService, PaneNavigationService, PaneStateService, SelectionRestoreService
 from widgets.batch_rename_dialog import BatchRenameDialog
@@ -257,6 +266,24 @@ class PaneController(QObject):
         self._history_service = HistoryService()
         self._pane_state_service = PaneStateService()
         self._selection_restore_service = SelectionRestoreService()
+        self._drag_mime_codec = DragMimeCodec(
+            self._transfer_service,
+            clipboard_mime_type=self._CLIPBOARD_MIME_TYPE,
+            clipboard_operation_mime_type=self._CLIPBOARD_OPERATION_MIME_TYPE,
+            remote_clipboard_mime_type=self._REMOTE_CLIPBOARD_MIME_TYPE,
+            internal_drag_mime_type=self._INTERNAL_DRAG_MIME_TYPE,
+            ark_dnd_service_mime=self._ARK_DND_SERVICE_MIME,
+            ark_dnd_path_mime=self._ARK_DND_PATH_MIME,
+        )
+        self._remote_drag_guard = RemoteDragGuard()
+        self._drag_visual_service = DragVisualService()
+        self._drag_session_service = DragSessionService(
+            self._drag_mime_codec,
+            self._drag_visual_service,
+            self._remote_drag_guard,
+        )
+        self._drop_target_service = DropTargetService(self._drop_service)
+        self._drop_execution_service = DropExecutionService(self._drop_service)
         self.path_bar = None
         self.btn_search = None
         self.btn_view_mode = None
@@ -308,6 +335,8 @@ class PaneController(QObject):
         self.tree_view = self.widget.findChild(QTreeView, "fileTree")
         self.icon_view = None
         self.view_stack = None
+        self.btn_nav_back = self.widget.findChild(QToolButton, "btnPaneNavBack")
+        self.btn_nav_up = self.widget.findChild(QToolButton, "btnPaneNavUp")
         self.path_bar_container = self.widget.findChild(QWidget, "pathBarContainer")
         self.btn_view_mode = self.widget.findChild(QToolButton, "btnViewMode")
         self.search_bar_widget = None
@@ -325,6 +354,7 @@ class PaneController(QObject):
         self._show_hidden_files = bool(getattr(self._editor_settings, "show_hidden_files", False))
 
         self.setup_tree_view()
+        self.setup_navigation_buttons()
         self.setup_path_bar()
         self.setup_view_mode_button()
         self.setup_tab_bar()
@@ -466,6 +496,7 @@ class PaneController(QObject):
 
             root_index = self.model.index(self._pending_root_path)
             if root_index.isValid():
+                self.tree_view.collapseAll()
                 self.tree_view.setRootIndex(root_index)
                 self.tree_view.expand(root_index)
                 if self.icon_view is not None:
@@ -630,6 +661,26 @@ class PaneController(QObject):
         self.path_bar.set_remote_subdirectory_provider(self._path_bar_remote_subdirectories)
         self.path_bar_container.layout().addWidget(self.path_bar)
 
+    def setup_navigation_buttons(self):
+        style = self.widget.style()
+        if self.btn_nav_back is not None:
+            self.btn_nav_back.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
+            self.btn_nav_back.setText("")
+            self.btn_nav_back.setToolTip(app_tr("PaneController", "Zurück"))
+            self.btn_nav_back.setAutoRaise(True)
+            self.btn_nav_back.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            self.btn_nav_back.clicked.connect(self.navigate_back)
+
+        if self.btn_nav_up is not None:
+            self.btn_nav_up.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_FileDialogToParent))
+            self.btn_nav_up.setText("")
+            self.btn_nav_up.setToolTip(app_tr("PaneController", "Eine Ebene nach oben"))
+            self.btn_nav_up.setAutoRaise(True)
+            self.btn_nav_up.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            self.btn_nav_up.clicked.connect(self.navigate_up)
+
+        self.update_navigation_buttons()
+
     def _path_bar_remote_subdirectories(self, location: PaneLocation):
         if self._remote_drive_controller is None or location is None or not location.is_remote:
             return []
@@ -648,7 +699,7 @@ class PaneController(QObject):
             self.btn_search.setToolTip(app_tr("PaneController", "Suchen"))
             self.btn_search.setAutoRaise(True)
             self.btn_search.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            pane_top_bar.layout().insertWidget(1, self.btn_search)
+            pane_top_bar.layout().insertWidget(pane_top_bar.layout().count() - 1, self.btn_search)
             self.btn_search.clicked.connect(self.toggle_search_bar)
 
         root_layout = self.widget.layout()
@@ -895,6 +946,10 @@ class PaneController(QObject):
         self.optimize_columns()
 
     def retranslate_ui_texts(self):
+        if self.btn_nav_back is not None:
+            self.btn_nav_back.setToolTip(app_tr("PaneController", "Zurück"))
+        if self.btn_nav_up is not None:
+            self.btn_nav_up.setToolTip(app_tr("PaneController", "Eine Ebene nach oben"))
         if self.btn_search is not None:
             self.btn_search.setToolTip(app_tr("PaneController", "Suchen"))
         if self.btn_view_mode is not None:
@@ -1303,6 +1358,26 @@ class PaneController(QObject):
                 has_multi_select_modifier = bool(
                     event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
                 )
+                if (
+                    self.current_location is not None
+                    and self.current_location.is_remote
+                    and index.isValid()
+                    and is_selected_index
+                    and not has_multi_select_modifier
+                ):
+                    drag_locations = self._selected_remote_locations_from_view(watched_view)
+                    self._drag_session_service.arm_remote_drag(
+                        source_view=watched_view,
+                        start_pos=event.position().toPoint(),
+                        locations=drag_locations,
+                    )
+                    debug_log(
+                        "Remote drag snapshot captured: "
+                        f"count={len(drag_locations)} "
+                        f"paths={[location.path for location in drag_locations[:5]]}"
+                    )
+                    return True
+                self._drag_session_service.clear_remote_drag()
                 if (not index.isValid() or not is_selected_index) and not has_multi_select_modifier:
                     watched_view.clearSelection()
                     watched_view.setCurrentIndex(QModelIndex())
@@ -1331,6 +1406,18 @@ class PaneController(QObject):
 
             if event.type() == QEvent.Type.MouseMove and (event.buttons() & Qt.MouseButton.LeftButton):
                 if (
+                    self.current_location is not None
+                    and self.current_location.is_remote
+                    and self._drag_session_service.should_start_remote_drag(
+                        source_view=watched_view,
+                        current_pos=event.position().toPoint(),
+                        drag_distance=QApplication.startDragDistance(),
+                    )
+                ):
+                    self._start_remote_selection_drag(watched_view)
+                    self._drag_session_service.clear_remote_drag()
+                    return True
+                if (
                     self._selection_rubber_band is not None
                     and self._selection_rubber_origin is not None
                     and self._selection_rubber_viewport is watched_view.viewport()
@@ -1339,10 +1426,14 @@ class PaneController(QObject):
                     self._selection_rubber_band.setGeometry(rubber_rect)
 
             if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                handled_remote_press = self._drag_session_service.release_was_guarded()
                 if self._selection_rubber_band is not None:
                     self._selection_rubber_band.hide()
                 self._selection_rubber_origin = None
                 self._selection_rubber_viewport = None
+                self._drag_session_service.clear_remote_drag()
+                if handled_remote_press:
+                    return True
 
             if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.MiddleButton:
                 index = watched_view.indexAt(event.position().toPoint())
@@ -1502,6 +1593,7 @@ class PaneController(QObject):
             self.search_bar_widget.setVisible(False)
         if self.search_line_edit is not None:
             self.search_line_edit.clear()
+        QTimer.singleShot(0, self._restore_active_view_focus_if_alive)
         if self.search_results_view is not None:
             self.search_results_view.clear()
         if self.view_stack is not None and self.search_results_view is not None:
@@ -1681,43 +1773,39 @@ class PaneController(QObject):
             )
         return locations
 
-    def _build_remote_clipboard_mime_data(self, locations: list[PaneLocation], *, operation: str) -> QMimeData:
-        mime_data = QMimeData()
-        payload = [
-            {
-                "kind": location.kind,
-                "path": location.path,
-                "remote_id": location.remote_id,
-            }
-            for location in locations
-            if location.is_remote and location.remote_id
-        ]
-        mime_data.setData(self._REMOTE_CLIPBOARD_MIME_TYPE, json.dumps(payload).encode("utf-8"))
-        mime_data.setData(self._CLIPBOARD_OPERATION_MIME_TYPE, operation.encode("utf-8"))
-        return mime_data
+    def _selected_remote_locations_from_view(self, view) -> list[PaneLocation]:
+        if self.current_location is None or not self.current_location.is_remote or view is None:
+            return []
+        selection_model = view.selectionModel() if hasattr(view, "selectionModel") else None
+        model = view.model() if hasattr(view, "model") else None
+        if selection_model is None or model is None or not hasattr(model, "filePath"):
+            return []
 
-    def _extract_remote_locations_from_mime(self, mime_data) -> list[PaneLocation]:
-        if mime_data is None or not mime_data.hasFormat(self._REMOTE_CLIPBOARD_MIME_TYPE):
-            return []
-        raw_payload = bytes(mime_data.data(self._REMOTE_CLIPBOARD_MIME_TYPE)).decode("utf-8", errors="ignore")
-        try:
-            parsed = json.loads(raw_payload)
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(parsed, list):
-            return []
+        indexes = []
+        if hasattr(selection_model, "selectedRows"):
+            indexes = list(selection_model.selectedRows(0))
+        elif hasattr(selection_model, "selectedIndexes"):
+            indexes = [index for index in selection_model.selectedIndexes() if index.column() == 0]
 
         locations: list[PaneLocation] = []
-        for item in parsed:
-            if not isinstance(item, dict):
+        seen_paths: set[str] = set()
+        for index in indexes:
+            if not index.isValid():
                 continue
-            path = QDir.cleanPath(str(item.get("path") or ""))
-            remote_id = str(item.get("remote_id") or "").strip()
-            kind = str(item.get("kind") or "remote").strip() or "remote"
-            if kind != "remote" or not path or not remote_id or path == "/":
+            clean_path = QDir.cleanPath(str(model.filePath(index) or ""))
+            if not clean_path or clean_path == "/" or clean_path in seen_paths:
                 continue
-            locations.append(PaneLocation(kind="remote", path=path, remote_id=remote_id))
+            seen_paths.add(clean_path)
+            locations.append(
+                PaneLocation(kind="remote", path=clean_path, remote_id=self.current_location.remote_id)
+            )
         return locations
+
+    def _build_remote_clipboard_mime_data(self, locations: list[PaneLocation], *, operation: str) -> QMimeData:
+        return self._drag_mime_codec.build_remote_mime_data(locations, operation=operation)
+
+    def _extract_remote_locations_from_mime(self, mime_data) -> list[PaneLocation]:
+        return self._drag_mime_codec.extract_remote_locations(mime_data)
 
     def _download_remote_file_for_open(self, location: PaneLocation) -> str | None:
         if self._remote_drive_controller is None:
@@ -2097,20 +2185,10 @@ class PaneController(QObject):
         )
 
     def extract_paths_from_mime(self, mime_data):
-        return self._transfer_service.extract_paths_from_mime(
-            mime_data,
-            internal_drag_mime_type=self._INTERNAL_DRAG_MIME_TYPE,
-            clipboard_mime_type=self._CLIPBOARD_MIME_TYPE,
-            ark_dnd_service_mime=self._ARK_DND_SERVICE_MIME,
-            ark_dnd_path_mime=self._ARK_DND_PATH_MIME,
-            logger=debug_log,
-        )
+        return self._drag_mime_codec.extract_local_paths(mime_data, logger=debug_log)
 
     def extract_operation_from_mime(self, mime_data):
-        return self._transfer_service.extract_operation_from_mime(
-            mime_data,
-            operation_mime_type=self._CLIPBOARD_OPERATION_MIME_TYPE,
-        )
+        return self._drag_mime_codec.extract_operation(mime_data)
 
     def extract_paths_from_drag_source(self, source_widget):
         if self.tree_view_adapter is None and self.icon_view_adapter is None:
@@ -2504,48 +2582,24 @@ class PaneController(QObject):
     def paste_from_clipboard(self, target_directory=None):
         clipboard = QApplication.clipboard()
         mime_data = clipboard.mimeData()
-        remote_locations = self._extract_remote_locations_from_mime(mime_data)
-        source_paths = self.extract_paths_from_mime(mime_data)
-        if not source_paths and not remote_locations:
+        payload = self._drag_mime_codec.decode_payload(mime_data, logger=debug_log)
+        if payload.is_empty:
             return
 
         destination = target_directory or self.resolve_drop_target_directory()
-        if self.current_location is not None and self.current_location.is_remote:
-            if remote_locations:
-                self._paste_remote_paths_to_remote(
-                    remote_locations,
-                    destination,
-                    move=self.extract_operation_from_mime(mime_data) == "cut",
-                    clear_clipboard_on_success=True,
-                )
-                return
-
-            if self.extract_operation_from_mime(mime_data) == "cut":
-                self.show_operation_feedback(app_tr("PaneController", "Verschieben nach Remote ist noch nicht verfügbar"))
-                return
-            self._paste_local_paths_to_remote(source_paths, destination)
-            return
-
-        if remote_locations:
-            self._paste_remote_paths_to_local(
-                remote_locations,
-                destination,
-                move=self.extract_operation_from_mime(mime_data) == "cut",
-                clear_clipboard_on_success=self.extract_operation_from_mime(mime_data) == "cut",
-            )
-            return
-
-        operation = self.extract_operation_from_mime(mime_data)
-        if operation == "cut":
-            self._start_file_operation(
-                source_paths,
-                destination,
-                "move",
-                clear_clipboard_on_success=True,
-            )
-            return
-
-        self.copy_paths_to_directory(source_paths, destination)
+        self._drop_execution_service.execute_paste(
+            payload=payload,
+            current_location=self.current_location,
+            target_directory=destination,
+            paste_local_to_remote=self._paste_local_paths_to_remote,
+            paste_remote_to_local=self._paste_remote_paths_to_local,
+            paste_remote_to_remote=self._paste_remote_paths_to_remote,
+            start_local_file_operation=self._start_file_operation,
+            copy_paths_to_directory=self.copy_paths_to_directory,
+            on_local_cut_to_remote_unavailable=lambda: self.show_operation_feedback(
+                app_tr("PaneController", "Verschieben nach Remote ist noch nicht verfügbar")
+            ),
+        )
 
     def _paste_local_paths_to_remote(self, source_paths, target_directory=None):
         if self.current_location is None or not self.current_location.is_remote or self._remote_drive_controller is None:
@@ -2569,9 +2623,14 @@ class PaneController(QObject):
         if not uploaded:
             return False
 
-        self.refresh_current_directory()
-        self.show_operation_feedback(
-            app_tr("PaneController", "{count} Element(e) nach Remote kopiert").format(count=len(uploaded))
+        QTimer.singleShot(
+            0,
+            lambda count=len(uploaded): (
+                self.refresh_current_directory(),
+                self.show_operation_feedback(
+                    app_tr("PaneController", "{count} Element(e) nach Remote kopiert").format(count=count)
+                ),
+            ),
         )
         return True
 
@@ -2607,24 +2666,23 @@ class PaneController(QObject):
         if not transferred:
             return False
 
-        self.refresh_current_directory(preserve_focus=True, force_rescan=True)
-        self.filesystemMutationCommitted.emit()
-        if move:
-            if clear_clipboard_on_success:
+        def finalize_remote_to_local():
+            self.refresh_current_directory(preserve_focus=True, force_rescan=True)
+            self.filesystemMutationCommitted.emit()
+            if move and clear_clipboard_on_success:
                 QApplication.clipboard().clear()
                 self.clear_cut_state()
-            self.show_operation_feedback(
-                app_tr("PaneController", "{count} Remote-Element(e) lokal verschoben").format(
-                    count=len(transferred)
-                )
+            message = (
+                app_tr("PaneController", "{count} Remote-Element(e) lokal verschoben")
+                if move
+                else app_tr("PaneController", "{count} Remote-Element(e) lokal kopiert")
             )
+            self.show_operation_feedback(message.format(count=len(transferred)))
+
+        QTimer.singleShot(0, finalize_remote_to_local)
+        if move:
             return True
 
-        self.show_operation_feedback(
-            app_tr("PaneController", "{count} Remote-Element(e) lokal kopiert").format(
-                count=len(transferred)
-            )
-        )
         return True
 
     def _paste_remote_paths_to_remote(
@@ -2661,22 +2719,22 @@ class PaneController(QObject):
         if not changed:
             return False
 
-        if move:
-            if clear_clipboard_on_success:
+        def finalize_remote_to_remote():
+            if move and clear_clipboard_on_success:
                 QApplication.clipboard().clear()
                 self.clear_cut_state()
             self.refresh_current_directory()
-            self.show_operation_feedback(
-                app_tr("PaneController", "{count} Remote-Element(e) verschoben").format(
-                    count=len(changed)
-                )
+            message = (
+                app_tr("PaneController", "{count} Remote-Element(e) verschoben")
+                if move
+                else app_tr("PaneController", "{count} Remote-Element(e) kopiert")
             )
+            self.show_operation_feedback(message.format(count=len(changed)))
+
+        QTimer.singleShot(0, finalize_remote_to_remote)
+        if move:
             return True
 
-        self.refresh_current_directory()
-        self.show_operation_feedback(
-            app_tr("PaneController", "{count} Remote-Element(e) kopiert").format(count=len(changed))
-        )
         return True
 
     def create_folder(self, target_directory=None, base_name=None):
@@ -2991,58 +3049,86 @@ class PaneController(QObject):
         QTimer.singleShot(0, self._restore_active_view_focus_if_alive)
 
     def resolve_drop_context(self, mime_data, pos, source_widget=None, source_view=None):
-        context = self._drop_service.resolve_drop_context(
+        context = self._drop_target_service.resolve_context(
             mime_data,
             pos=pos,
             source_widget=source_widget,
             source_view=source_view,
-            extract_paths_from_mime=self.extract_paths_from_mime,
+            mime_codec=self._drag_mime_codec,
             extract_paths_from_drag_source=self.extract_paths_from_drag_source,
             resolve_drop_target_directory=self.resolve_drop_target_directory,
+            ark_reference=self.extract_ark_drop_reference(mime_data),
+            logger=debug_log,
         )
-        return context.source_paths, context.target_dir
+        return context.payload.local_paths, context.target_dir
 
     def can_accept_tree_drop(self, mime_data, pos, source_widget=None, source_paths=None, target_dir=None):
         if source_paths is None or target_dir is None:
-            source_paths, target_dir = self.resolve_drop_context(mime_data, pos, source_widget)
-        ark_reference = self.extract_ark_drop_reference(mime_data)
-        remote_locations = self._extract_remote_locations_from_mime(mime_data)
-        if not source_paths and not remote_locations and ark_reference is None:
+            context = self._drop_target_service.resolve_context(
+                mime_data,
+                pos=pos,
+                source_widget=source_widget,
+                source_view=None,
+                mime_codec=self._drag_mime_codec,
+                extract_paths_from_drag_source=self.extract_paths_from_drag_source,
+                resolve_drop_target_directory=self.resolve_drop_target_directory,
+                ark_reference=self.extract_ark_drop_reference(mime_data),
+                logger=debug_log,
+            )
+        else:
+            payload = self._drag_mime_codec.decode_payload(
+                mime_data,
+                logger=debug_log,
+                ark_reference=self.extract_ark_drop_reference(mime_data),
+            )
+            context = DragDropContext(
+                payload=DragPayload(
+                    local_paths=source_paths,
+                    remote_locations=payload.remote_locations,
+                    operation=payload.operation,
+                    ark_reference=payload.ark_reference,
+                ),
+                target_dir=target_dir,
+            )
+        if context.payload.is_empty:
             self.clear_drop_target_visual()
             return False
-
-        if self.current_location is not None and self.current_location.is_remote:
-            if ark_reference is not None:
-                return False
-            if remote_locations:
-                return bool(target_dir)
-            return any(Path(path).exists() for path in source_paths)
-
-        if remote_locations:
-            return QDir(str(target_dir or "")).exists()
-
-        return self._drop_service.can_accept_tree_drop(
-            source_paths=source_paths,
-            target_dir=target_dir,
-            ark_reference=ark_reference,
-        )
+        return self._drop_target_service.can_accept_drop(context, current_location=self.current_location)
 
     def resolve_drop_action(self, event, source_paths=None, target_dir=None, mime_data=None, source_widget=None):
-        if self.current_location is not None and self.current_location.is_remote:
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                return Qt.DropAction.MoveAction
-            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                return Qt.DropAction.CopyAction
-            remote_locations = self._extract_remote_locations_from_mime(mime_data)
-            if remote_locations and all(location.remote_id == self.current_location.remote_id for location in remote_locations):
-                return Qt.DropAction.MoveAction
-            return Qt.DropAction.CopyAction
+        if source_paths is None or target_dir is None:
+            context = self._drop_target_service.resolve_context(
+                mime_data,
+                pos=None,
+                source_widget=source_widget,
+                source_view=None,
+                mime_codec=self._drag_mime_codec,
+                extract_paths_from_drag_source=self.extract_paths_from_drag_source,
+                resolve_drop_target_directory=self.resolve_drop_target_directory,
+                ark_reference=self.extract_ark_drop_reference(mime_data),
+                logger=debug_log,
+            )
+        else:
+            payload = self._drag_mime_codec.decode_payload(
+                mime_data,
+                logger=debug_log,
+                ark_reference=self.extract_ark_drop_reference(mime_data),
+            )
+            context = DragDropContext(
+                payload=DragPayload(
+                    local_paths=source_paths,
+                    remote_locations=payload.remote_locations,
+                    operation=payload.operation,
+                    ark_reference=payload.ark_reference,
+                ),
+                target_dir=target_dir,
+            )
         tree_viewport = self.tree_view.viewport() if self.tree_view is not None else None
         icon_viewport = self.icon_view.viewport() if self.icon_view is not None else None
-        return self._drop_service.resolve_drop_action(
+        return self._drop_target_service.resolve_drop_action(
             event=event,
-            source_paths=source_paths or [],
-            target_dir=target_dir or "",
+            context=context,
+            current_location=self.current_location,
             mime_data=mime_data,
             source_widget=source_widget,
             internal_drag_mime_type=self._INTERNAL_DRAG_MIME_TYPE,
@@ -3146,36 +3232,42 @@ class PaneController(QObject):
         target_dir=None,
     ):
         if source_paths is None or target_dir is None:
-            source_paths, target_dir = self.resolve_drop_context(mime_data, pos, source_widget)
-        ark_reference = self.extract_ark_drop_reference(mime_data)
-        remote_locations = self._extract_remote_locations_from_mime(mime_data)
-        if self.current_location is not None and self.current_location.is_remote:
-            if ark_reference is not None:
-                return False
-            if remote_locations:
-                return self._paste_remote_paths_to_remote(
-                    remote_locations,
-                    target_dir,
-                    move=drop_action == Qt.DropAction.MoveAction,
-                )
-            local_source_paths = [path for path in source_paths if Path(path).exists()]
-            if not local_source_paths:
-                return False
-            return self._paste_local_paths_to_remote(local_source_paths, target_dir)
-        if remote_locations:
-            return self._paste_remote_paths_to_local(
-                remote_locations,
-                target_dir,
-                move=drop_action == Qt.DropAction.MoveAction,
+            context = self._drop_target_service.resolve_context(
+                mime_data,
+                pos=pos,
+                source_widget=source_widget,
+                source_view=None,
+                mime_codec=self._drag_mime_codec,
+                extract_paths_from_drag_source=self.extract_paths_from_drag_source,
+                resolve_drop_target_directory=self.resolve_drop_target_directory,
+                ark_reference=self.extract_ark_drop_reference(mime_data),
+                logger=debug_log,
             )
-        return self._drop_service.handle_tree_drop(
-            source_paths=source_paths,
-            target_dir=target_dir,
+        else:
+            payload = self._drag_mime_codec.decode_payload(
+                mime_data,
+                logger=debug_log,
+                ark_reference=self.extract_ark_drop_reference(mime_data),
+            )
+            context = DragDropContext(
+                payload=DragPayload(
+                    local_paths=source_paths,
+                    remote_locations=payload.remote_locations,
+                    operation=payload.operation,
+                    ark_reference=payload.ark_reference,
+                ),
+                target_dir=target_dir,
+            )
+        return self._drop_execution_service.execute_drop(
+            context=context,
+            current_location=self.current_location,
             drop_action=drop_action,
-            ark_reference=ark_reference,
-            copy_callback=self.copy_paths_to_directory,
-            move_callback=self.move_paths_to_directory,
-            link_callback=self.link_paths_to_directory,
+            paste_local_to_remote=self._paste_local_paths_to_remote,
+            paste_remote_to_local=self._paste_remote_paths_to_local,
+            paste_remote_to_remote=self._paste_remote_paths_to_remote,
+            copy_paths_to_directory=self.copy_paths_to_directory,
+            move_paths_to_directory=self.move_paths_to_directory,
+            link_paths_to_directory=self.link_paths_to_directory,
             ark_callback=self.extract_ark_drop_to_directory,
         )
 
@@ -3546,6 +3638,17 @@ class PaneController(QObject):
         drag.setMimeData(mime_data)
         drag.exec(Qt.DropAction.CopyAction)
 
+    def _start_remote_selection_drag(self, source_view) -> None:
+        if self.current_location is None or not self.current_location.is_remote:
+            return
+        if source_view is None:
+            return
+        self._drag_session_service.start_remote_drag(
+            widget=self.widget,
+            source_view=source_view,
+            locations=self._drag_session_service.remote_drag_locations(),
+        )
+
     def can_offer_grouping(self):
         if not self.parent() or not hasattr(self.parent(), "can_offer_grouping"):
             return False
@@ -3732,7 +3835,15 @@ class PaneController(QObject):
                 return
             self._remote_model.set_directory_entries(location, entries)
             self._apply_browser_model(self._remote_model)
-            self._set_remote_view_interaction_enabled(False)
+            self._set_remote_view_interaction_enabled(True)
+            for view in (self.tree_view, self.icon_view):
+                if view is None:
+                    continue
+                view.setDragEnabled(False)
+                view.setAcceptDrops(False)
+                view.viewport().setAcceptDrops(False)
+                view.setDropIndicatorShown(False)
+                view.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
             if self.tree_view is not None:
                 self.tree_view.setRootIndex(QModelIndex())
             if self.icon_view is not None:
@@ -3752,10 +3863,19 @@ class PaneController(QObject):
 
         self._apply_browser_model(self.model)
         self._set_remote_view_interaction_enabled(True)
+        for view in (self.tree_view, self.icon_view):
+            if view is None:
+                continue
+            view.setDragEnabled(True)
+            view.setAcceptDrops(True)
+            view.viewport().setAcceptDrops(True)
+            view.setDropIndicatorShown(True)
+            view.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self._pending_root_path = target_path
         root_index = self.model.setRootPath(target_path)
         index = root_index if root_index.isValid() else self.model.index(target_path)
         if index.isValid():
+            self.tree_view.collapseAll()
             self.tree_view.setRootIndex(index)
             self.tree_view.expand(index)
             if self.icon_view is not None:
@@ -4002,7 +4122,14 @@ class PaneController(QObject):
         return self.tab_states[self.active_tab_index]
 
     def emit_navigation_state(self):
+        self.update_navigation_buttons()
         self.navigationStateChanged.emit(self.can_go_back(), self.can_go_up())
+
+    def update_navigation_buttons(self):
+        if self.btn_nav_back is not None:
+            self.btn_nav_back.setEnabled(self.can_go_back())
+        if self.btn_nav_up is not None:
+            self.btn_nav_up.setEnabled(self.can_go_up())
 
     def export_state(self):
         self.capture_tab_state(self.active_tab_index)

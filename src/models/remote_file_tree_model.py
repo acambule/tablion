@@ -80,16 +80,10 @@ class RemoteFileTreeModel(QStandardItemModel):
         return self._current_location
 
     def mimeTypes(self) -> list[str]:
-        mime_types = list(super().mimeTypes())
-        if self.REMOTE_CLIPBOARD_MIME_TYPE not in mime_types:
-            mime_types.append(self.REMOTE_CLIPBOARD_MIME_TYPE)
-        return mime_types
+        return [self.REMOTE_CLIPBOARD_MIME_TYPE]
 
     def mimeData(self, indexes) -> QMimeData | None:
-        mime_data = super().mimeData(indexes)
-        if mime_data is None:
-            mime_data = QMimeData()
-
+        mime_data = QMimeData()
         payload: list[dict[str, str]] = []
         seen_paths: set[str] = set()
         for index in indexes:
@@ -97,7 +91,8 @@ class RemoteFileTreeModel(QStandardItemModel):
                 continue
 
             path = str(index.data(self.ROLE_PATH) or "").strip()
-            if not path or path in seen_paths or path == "/":
+            is_placeholder = bool(index.data(self.ROLE_PLACEHOLDER))
+            if not path or path in seen_paths or path == "/" or is_placeholder:
                 continue
             seen_paths.add(path)
             payload.append(
@@ -111,6 +106,17 @@ class RemoteFileTreeModel(QStandardItemModel):
         if payload:
             mime_data.setData(self.REMOTE_CLIPBOARD_MIME_TYPE, json.dumps(payload).encode("utf-8"))
         return mime_data
+
+    def supportedDragActions(self):
+        return Qt.DropAction.CopyAction | Qt.DropAction.MoveAction
+
+    def flags(self, index: QModelIndex):
+        default_flags = super().flags(index)
+        if not index.isValid():
+            return default_flags
+        if bool(index.siblingAtColumn(0).data(self.ROLE_PLACEHOLDER)):
+            return default_flags & ~Qt.ItemFlag.ItemIsDragEnabled
+        return default_flags | Qt.ItemFlag.ItemIsDragEnabled
 
     def _update_headers(self) -> None:
         self.setHorizontalHeaderLabels(

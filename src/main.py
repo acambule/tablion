@@ -62,8 +62,6 @@ class MainWindow(QMainWindow):
         self.navigator_manager = None
         self.btn_nav_menu = None
         self.btn_split_view = None
-        self.btn_nav_back = None
-        self.btn_nav_up = None
         self.action_refresh_tree = None
         self.action_group = None
         self._action_settings = None
@@ -761,7 +759,9 @@ class MainWindow(QMainWindow):
     def on_pane_navigation_changed(self, _can_back, _can_up):
         if self.sender() != self.get_active_pane():
             return
-        self.update_nav_buttons()
+
+    def update_nav_buttons(self):
+        return
 
     def persist_app_state(self):
         if self._persisted_once:
@@ -855,8 +855,9 @@ class MainWindow(QMainWindow):
     def setup_navigation_toolbar(self):
         self.btn_nav_menu = self.ui.findChild(QToolButton, "btnNavMenu")
         self.btn_split_view = self.ui.findChild(QToolButton, "btnSplitView")
-        self.btn_nav_back = self.ui.findChild(QToolButton, "btnNavBack")
-        self.btn_nav_up = self.ui.findChild(QToolButton, "btnNavUp")
+        left_toolbar = self.ui.findChild(QWidget, "leftToolbar")
+        if left_toolbar is not None:
+            left_toolbar.hide()
 
         style = self.ui.style()
 
@@ -918,24 +919,6 @@ class MainWindow(QMainWindow):
             self._action_split_4.triggered.connect(lambda: self.on_split_view_selected("4-split"))
             self.btn_split_view.setMenu(split_menu)
 
-        if self.btn_nav_back:
-            self.btn_nav_back.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
-            self.btn_nav_back.setText("")
-            self.btn_nav_back.setToolTip(app_tr("MainWindow", "Zurück"))
-            self.btn_nav_back.setAutoRaise(True)
-            self.btn_nav_back.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            self.btn_nav_back.clicked.connect(self.navigate_back)
-
-        if self.btn_nav_up:
-            self.btn_nav_up.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_FileDialogToParent))
-            self.btn_nav_up.setText("")
-            self.btn_nav_up.setToolTip(app_tr("MainWindow", "Eine Ebene nach oben"))
-            self.btn_nav_up.setAutoRaise(True)
-            self.btn_nav_up.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            self.btn_nav_up.clicked.connect(self.navigate_up)
-
-        self.update_nav_buttons()
-
     def retranslate_ui_texts(self):
         if self.btn_nav_menu is not None:
             self.btn_nav_menu.setToolTip(app_tr("MainWindow", "Menü"))
@@ -955,10 +938,6 @@ class MainWindow(QMainWindow):
         if self._action_split_4 is not None:
             self._action_split_4.setText(app_tr("MainWindow", "4-Split"))
 
-        if self.btn_nav_back is not None:
-            self.btn_nav_back.setToolTip(app_tr("MainWindow", "Zurück"))
-        if self.btn_nav_up is not None:
-            self.btn_nav_up.setToolTip(app_tr("MainWindow", "Eine Ebene nach oben"))
         active_pane = self.get_active_pane()
         if active_pane is not None:
             self._update_temporary_context_notice(active_pane.current_path())
@@ -978,6 +957,7 @@ class MainWindow(QMainWindow):
         navigator_widget.itemClicked.connect(self.on_nav_click)
         self.navigator_manager.entryMiddleClicked.connect(self.on_nav_middle_click)
         self.navigator_manager.remoteMountEditRequested.connect(self.on_navigator_remote_mount_edit_requested)
+        self.navigator_manager.remoteCloudSettingsRequested.connect(self.on_navigator_remote_cloud_settings_requested)
 
     def setup_shortcuts(self):
         self.action_refresh_tree = QAction(self.ui)
@@ -1017,28 +997,14 @@ class MainWindow(QMainWindow):
     def on_navigator_remote_mount_edit_requested(self, remote_mount_id: str):
         self.show_settings_dialog(remote_mount_id=remote_mount_id)
 
+    def on_navigator_remote_cloud_settings_requested(self):
+        self.show_settings_dialog()
+        if self._settings_dialog and hasattr(self._settings_dialog, "focus_remote_clouds"):
+            self._settings_dialog.focus_remote_clouds()
+
     def refresh_navigator(self):
         if self.navigator_manager is not None:
             self.navigator_manager.refresh()
-
-    def navigate_back(self):
-        active_pane = self.get_active_pane()
-        if active_pane:
-            active_pane.navigate_back()
-
-    def navigate_up(self):
-        active_pane = self.get_active_pane()
-        if active_pane:
-            active_pane.navigate_up()
-
-    def update_nav_buttons(self):
-        active_pane = self.get_active_pane()
-
-        if self.btn_nav_back:
-            self.btn_nav_back.setEnabled(bool(active_pane and active_pane.can_go_back()))
-
-        if self.btn_nav_up:
-            self.btn_nav_up.setEnabled(bool(active_pane and active_pane.can_go_up()))
 
     def update_window_title(self, path):
         normalized = QDir.cleanPath(path)
