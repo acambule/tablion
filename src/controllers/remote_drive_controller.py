@@ -289,6 +289,91 @@ class RemoteDriveController:
             uploaded.append(self._upload_local_path(source_path, destination))
         return uploaded
 
+    def upload_local_path(
+        self,
+        source_path: str | Path,
+        destination: PaneLocation,
+        *,
+        target_name: str | None = None,
+        overwrite: bool = False,
+    ) -> PaneLocation:
+        source = Path(source_path)
+        if not source.exists():
+            raise OneDriveAuthError("Die lokale Quelle wurde nicht gefunden.")
+        return self._upload_local_path(source, destination, target_name=target_name, overwrite=overwrite)
+
+    def transfer_items_to_remote(
+        self,
+        locations: list[PaneLocation],
+        destination: PaneLocation,
+        *,
+        move: bool = False,
+    ) -> list[PaneLocation]:
+        if not destination.is_remote:
+            raise OneDriveAuthError("Es wurde kein Remote-Ziel übergeben.")
+
+        same_mount_locations = [
+            location for location in locations
+            if location.is_remote and location.remote_id == destination.remote_id
+        ]
+        cross_mount_locations = [
+            location for location in locations
+            if location.is_remote and location.remote_id != destination.remote_id
+        ]
+
+        transferred: list[PaneLocation] = []
+        if same_mount_locations:
+            for location in same_mount_locations:
+                transferred.append(self.transfer_item_to_remote(location, destination, move=move))
+
+        for location in cross_mount_locations:
+            transferred.append(self.transfer_item_to_remote(location, destination, move=move))
+
+        return transferred
+
+    def transfer_item_to_remote(
+        self,
+        location: PaneLocation,
+        destination: PaneLocation,
+        *,
+        move: bool = False,
+        target_name: str | None = None,
+        overwrite: bool = False,
+    ) -> PaneLocation:
+        if not location.is_remote:
+            raise OneDriveAuthError("Es wurde kein Remote-Element übergeben.")
+        if not destination.is_remote:
+            raise OneDriveAuthError("Es wurde kein Remote-Ziel übergeben.")
+
+        source_name = PurePosixPath(str(location.path or "/")).name.strip()
+        resolved_name = str(target_name or source_name).strip() or source_name
+
+        if location.remote_id == destination.remote_id:
+            return self._transfer_remote_item_same_mount(
+                location,
+                destination,
+                move=move,
+                target_name=resolved_name,
+                overwrite=overwrite,
+            )
+
+        temp_root = self._cache_root() / "transfer-staging" / str(destination.remote_id or "remote")
+        temp_root.mkdir(parents=True, exist_ok=True)
+        local_target = self._next_available_local_path(temp_root, resolved_name)
+        self._download_remote_path(location, local_target)
+        try:
+            uploaded_location = self._upload_local_path(
+                local_target,
+                destination,
+                target_name=resolved_name,
+                overwrite=overwrite,
+            )
+            if move:
+                self.delete_items([location])
+            return uploaded_location
+        finally:
+            self._remove_local_path(local_target)
+
     def transfer_items_to_local(
         self,
         locations: list[PaneLocation],
@@ -305,18 +390,37 @@ class RemoteDriveController:
         for location in locations:
             if not location.is_remote:
                 continue
-            target_name = PurePosixPath(str(location.path or "/")).name.strip()
-            if not target_name:
-                continue
-
-            target_path = self._next_available_local_path(target_root, target_name)
-            self._download_remote_path(location, target_path)
-            transferred.append(target_path)
-
-            if move:
-                self.delete_items([location])
+            transferred.append(self.transfer_item_to_local(location, target_root, move=move))
 
         return transferred
+
+    def transfer_item_to_local(
+        self,
+        location: PaneLocation,
+        destination_directory: str | Path,
+        *,
+        move: bool = False,
+        target_name: str | None = None,
+        overwrite: bool = False,
+    ) -> Path:
+        target_root = Path(destination_directory).expanduser().resolve()
+        if target_root.exists() and not target_root.is_dir():
+            raise OneDriveAuthError("Das lokale Ziel ist kein Ordner.")
+        target_root.mkdir(parents=True, exist_ok=True)
+
+        source_name = PurePosixPath(str(location.path or "/")).name.strip()
+        resolved_name = str(target_name or source_name).strip() or source_name
+        target_path = target_root / resolved_name
+        if target_path.exists():
+            if overwrite:
+                self._remove_local_path(target_path)
+            else:
+                target_path = self._next_available_local_path(target_root, resolved_name)
+
+        self._download_remote_path(location, target_path)
+        if move:
+            self.delete_items([location])
+        return target_path
 
     def download_file_to_cache(self, location: PaneLocation) -> Path:
         if not location.is_remote:
@@ -399,7 +503,14 @@ class RemoteDriveController:
         child = (base / child_name).as_posix()
         return child if child.startswith("/") else f"/{child}"
 
-    def _upload_local_path(self, source_path: Path, destination: PaneLocation) -> PaneLocation:
+    def _upload_local_path(
+        self,
+        source_path: Path,
+        destination: PaneLocation,
+        *,
+        target_name: str | None = None,
+        overwrite: bool = False,
+    ) -> PaneLocation:
         mount = self._mount_by_id(destination.remote_id)
         if mount is None:
             raise OneDriveAuthError("Remote-Eintrag wurde nicht gefunden.")
@@ -408,7 +519,13 @@ class RemoteDriveController:
         if not drive_id:
             raise OneDriveAuthError("Für den Remote-Eintrag ist keine Drive-ID hinterlegt.")
 
-        target_name = self._next_available_name(destination, source_path.name)
+        desired_name = str(target_name or source_path.name).strip() or source_path.name
+        existing_target = self._remote_child_location(destination, desired_name)
+        if overwrite and existing_target is not None:
+            self.delete_items([existing_target])
+            resolved_name = desired_name
+        else:
+            resolved_name = self._next_available_name(destination, desired_name)
         graph_parent = self._join_mount_path(mount.root_path, destination.path)
 
         if source_path.is_dir():
@@ -416,11 +533,11 @@ class RemoteDriveController:
                 access_token=connection.access_token,
                 drive_id=drive_id,
                 parent_path=graph_parent,
-                folder_name=target_name,
+                folder_name=resolved_name,
             )
             new_destination = PaneLocation(
                 kind="remote",
-                path=self._join_visible_path(destination.path, target_name),
+                path=self._join_visible_path(destination.path, resolved_name),
                 remote_id=destination.remote_id,
             )
             for child in sorted(source_path.iterdir(), key=lambda item: item.name.lower()):
@@ -431,14 +548,95 @@ class RemoteDriveController:
             access_token=connection.access_token,
             drive_id=drive_id,
             parent_path=graph_parent,
-            file_name=target_name,
+            file_name=resolved_name,
             content=source_path.read_bytes(),
         )
         return PaneLocation(
             kind="remote",
-            path=self._join_visible_path(destination.path, target_name),
+            path=self._join_visible_path(destination.path, resolved_name),
             remote_id=destination.remote_id,
         )
+
+    def _transfer_remote_item_same_mount(
+        self,
+        location: PaneLocation,
+        destination: PaneLocation,
+        *,
+        move: bool = False,
+        target_name: str | None = None,
+        overwrite: bool = False,
+    ) -> PaneLocation:
+        destination_mount = self._mount_by_id(destination.remote_id)
+        if destination_mount is None:
+            raise OneDriveAuthError("Remote-Eintrag wurde nicht gefunden.")
+        destination_connection = self._ensure_connection_for_mount(destination_mount)
+        destination_drive_id = destination_mount.drive_id or destination_connection.drive_id
+        if not destination_drive_id:
+            raise OneDriveAuthError("Für den Remote-Eintrag ist keine Drive-ID hinterlegt.")
+
+        destination_item = self._onedrive_client.get_item(
+            access_token=destination_connection.access_token,
+            drive_id=destination_drive_id,
+            item_path=self._join_mount_path(destination_mount.root_path, destination.path),
+        )
+        destination_folder_id = str(destination_item.get("id") or "").strip()
+        if not destination_folder_id:
+            raise OneDriveAuthError("Das Remote-Ziel konnte nicht bestimmt werden.")
+
+        source_mount = self._mount_by_id(location.remote_id)
+        if source_mount is None:
+            raise OneDriveAuthError("Remote-Eintrag wurde nicht gefunden.")
+        source_connection = self._ensure_connection_for_mount(source_mount)
+        source_drive_id = source_mount.drive_id or source_connection.drive_id
+        if not source_drive_id:
+            raise OneDriveAuthError("Für den Remote-Eintrag ist keine Drive-ID hinterlegt.")
+        source_item = self._onedrive_client.get_item(
+            access_token=source_connection.access_token,
+            drive_id=source_drive_id,
+            item_path=self._join_mount_path(source_mount.root_path, location.path),
+        )
+        source_item_id = str(source_item.get("id") or "").strip()
+        if not source_item_id:
+            raise OneDriveAuthError("Das Remote-Element konnte nicht bestimmt werden.")
+
+        source_name = PurePosixPath(str(location.path or "/")).name.strip()
+        resolved_name = str(target_name or source_name).strip() or source_name
+        target_location = PaneLocation(
+            kind="remote",
+            path=self._join_visible_path(destination.path, resolved_name),
+            remote_id=destination.remote_id,
+        )
+        existing_target = self._remote_child_location(destination, resolved_name)
+        if existing_target is not None and existing_target.path != location.path:
+            if overwrite:
+                self.delete_items([existing_target])
+            else:
+                resolved_name = self._next_available_name(destination, resolved_name)
+                target_location = PaneLocation(
+                    kind="remote",
+                    path=self._join_visible_path(destination.path, resolved_name),
+                    remote_id=destination.remote_id,
+                )
+
+        new_name = resolved_name if resolved_name != source_name else None
+        if move:
+            self._onedrive_client.move_item(
+                access_token=source_connection.access_token,
+                drive_id=source_drive_id,
+                item_id=source_item_id,
+                destination_folder_id=destination_folder_id,
+                new_name=new_name,
+            )
+        else:
+            self._onedrive_client.copy_item(
+                access_token=source_connection.access_token,
+                drive_id=source_drive_id,
+                item_id=source_item_id,
+                destination_folder_id=destination_folder_id,
+                destination_drive_id=destination_drive_id,
+                new_name=new_name,
+            )
+        return target_location
 
     def _download_remote_path(self, location: PaneLocation, target_path: Path) -> Path:
         mount = self._mount_by_id(location.remote_id)
@@ -511,6 +709,33 @@ class RemoteDriveController:
             if not next_candidate.exists():
                 return next_candidate
             counter += 1
+
+    def _remote_child_location(self, destination: PaneLocation, child_name: str) -> PaneLocation | None:
+        target = str(child_name or "").strip()
+        if not target:
+            return None
+        try:
+            for entry in self.list_directory(destination):
+                if entry.name.casefold() == target.casefold():
+                    return entry.location
+        except Exception:
+            return None
+        return None
+
+    def _remove_local_path(self, target_path: Path) -> None:
+        path = Path(target_path)
+        if not path.exists():
+            return
+        if path.is_file():
+            path.unlink()
+            return
+        for child in sorted(path.rglob("*"), reverse=True):
+            if child.is_file():
+                child.unlink()
+            elif child.is_dir():
+                child.rmdir()
+        if path.exists():
+            path.rmdir()
 
     def _parse_datetime(self, value) -> datetime | None:
         text = str(value or "").strip()

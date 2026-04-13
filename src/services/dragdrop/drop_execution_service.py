@@ -20,7 +20,6 @@ class DropExecutionService:
         paste_remote_to_remote,
         start_local_file_operation,
         copy_paths_to_directory,
-        on_local_cut_to_remote_unavailable,
     ) -> bool:
         if payload.is_empty:
             return False
@@ -33,10 +32,12 @@ class DropExecutionService:
                     move=payload.operation == "cut",
                     clear_clipboard_on_success=True,
                 )
-            if payload.operation == "cut":
-                on_local_cut_to_remote_unavailable()
-                return False
-            return paste_local_to_remote(payload.local_paths, target_directory)
+            return paste_local_to_remote(
+                payload.local_paths,
+                target_directory,
+                move=payload.operation == "cut",
+                clear_clipboard_on_success=payload.operation == "cut",
+            )
 
         if payload.has_remote_locations:
             return paste_remote_to_local(
@@ -82,7 +83,11 @@ class DropExecutionService:
             local_source_paths = [path for path in payload.local_paths if Path(path).exists()]
             if not local_source_paths:
                 return False
-            return paste_local_to_remote(local_source_paths, context.target_dir)
+            return paste_local_to_remote(
+                local_source_paths,
+                context.target_dir,
+                move=drop_action == Qt.DropAction.MoveAction,
+            )
 
         if payload.has_remote_locations:
             return paste_remote_to_local(

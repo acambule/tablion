@@ -48,6 +48,7 @@ from services.dragdrop import (
     RemoteDragGuard,
 )
 from services.navigation import HistoryService, PaneNavigationService, PaneStateService, SelectionRestoreService
+from services.transfer import RemoteTransferCoordinator, RemoteTransferService
 from widgets.batch_rename_dialog import BatchRenameDialog
 from widgets.path_bar import PathBar
 from widgets.properties_dialog import PropertiesDialog
@@ -284,6 +285,8 @@ class PaneController(QObject):
         )
         self._drop_target_service = DropTargetService(self._drop_service)
         self._drop_execution_service = DropExecutionService(self._drop_service)
+        self._remote_transfer_service = RemoteTransferService()
+        self._remote_transfer_coordinator = RemoteTransferCoordinator(self._remote_transfer_service)
         self.path_bar = None
         self.btn_search = None
         self.btn_view_mode = None
@@ -2596,12 +2599,16 @@ class PaneController(QObject):
             paste_remote_to_remote=self._paste_remote_paths_to_remote,
             start_local_file_operation=self._start_file_operation,
             copy_paths_to_directory=self.copy_paths_to_directory,
-            on_local_cut_to_remote_unavailable=lambda: self.show_operation_feedback(
-                app_tr("PaneController", "Verschieben nach Remote ist noch nicht verfügbar")
-            ),
         )
 
-    def _paste_local_paths_to_remote(self, source_paths, target_directory=None):
+    def _paste_local_paths_to_remote(
+        self,
+        source_paths,
+        target_directory=None,
+        *,
+        move: bool = False,
+        clear_clipboard_on_success: bool = False,
+    ):
         if self.current_location is None or not self.current_location.is_remote or self._remote_drive_controller is None:
             return False
         destination_path = QDir.cleanPath(str(target_directory or self.current_location.path))
@@ -2611,7 +2618,14 @@ class PaneController(QObject):
             remote_id=self.current_location.remote_id,
         )
         try:
-            uploaded = self._remote_drive_controller.upload_local_paths(source_paths, destination)
+            transfer_result = self._remote_transfer_coordinator.transfer_local_to_remote(
+                widget=self.widget,
+                remote_drive_controller=self._remote_drive_controller,
+                file_operations=self.file_operations,
+                source_paths=source_paths,
+                destination=destination,
+                move=move,
+            )
         except Exception as error:
             QMessageBox.warning(
                 self.widget,
@@ -2620,18 +2634,37 @@ class PaneController(QObject):
             )
             return False
 
-        if not uploaded:
+        if transfer_result.errors:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Upload fehlgeschlagen"),
+                transfer_result.errors[0],
+            )
+
+        if not transfer_result.completed:
             return False
 
-        QTimer.singleShot(
-            0,
-            lambda count=len(uploaded): (
-                self.refresh_current_directory(),
-                self.show_operation_feedback(
-                    app_tr("PaneController", "{count} Element(e) nach Remote kopiert").format(count=count)
-                ),
-            ),
-        )
+        def finalize_local_to_remote():
+            self.refresh_current_directory()
+            self.filesystemMutationCommitted.emit()
+            if move and clear_clipboard_on_success:
+                QApplication.clipboard().clear()
+                self.clear_cut_state()
+            message = (
+                app_tr("PaneController", "{count} Element(e) nach Remote verschoben")
+                if move
+                else app_tr("PaneController", "{count} Element(e) nach Remote kopiert")
+            )
+            if transfer_result.skipped_count:
+                message = app_tr("PaneController", "{count} Element(e) übertragen, {skipped} übersprungen").format(
+                    count=len(transfer_result.completed),
+                    skipped=transfer_result.skipped_count,
+                )
+            else:
+                message = message.format(count=len(transfer_result.completed))
+            self.show_operation_feedback(message)
+
+        QTimer.singleShot(0, finalize_local_to_remote)
         return True
 
     def _paste_remote_paths_to_local(
@@ -2650,9 +2683,11 @@ class PaneController(QObject):
             return False
 
         try:
-            transferred = self._remote_drive_controller.transfer_items_to_local(
-                remote_locations,
-                destination_path,
+            transfer_result = self._remote_transfer_coordinator.transfer_remote_to_local(
+                widget=self.widget,
+                remote_drive_controller=self._remote_drive_controller,
+                locations=remote_locations,
+                destination_directory=destination_path,
                 move=move,
             )
         except Exception as error:
@@ -2663,7 +2698,14 @@ class PaneController(QObject):
             )
             return False
 
-        if not transferred:
+        if transfer_result.errors:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Download fehlgeschlagen"),
+                transfer_result.errors[0],
+            )
+
+        if not transfer_result.completed:
             return False
 
         def finalize_remote_to_local():
@@ -2677,7 +2719,14 @@ class PaneController(QObject):
                 if move
                 else app_tr("PaneController", "{count} Remote-Element(e) lokal kopiert")
             )
-            self.show_operation_feedback(message.format(count=len(transferred)))
+            if transfer_result.skipped_count:
+                message = app_tr("PaneController", "{count} Element(e) übertragen, {skipped} übersprungen").format(
+                    count=len(transfer_result.completed),
+                    skipped=transfer_result.skipped_count,
+                )
+            else:
+                message = message.format(count=len(transfer_result.completed))
+            self.show_operation_feedback(message)
 
         QTimer.singleShot(0, finalize_remote_to_local)
         if move:
@@ -2703,10 +2752,12 @@ class PaneController(QObject):
             remote_id=self.current_location.remote_id,
         )
         try:
-            changed = (
-                self._remote_drive_controller.move_items(remote_locations, destination_location)
-                if move
-                else self._remote_drive_controller.copy_items(remote_locations, destination_location)
+            transfer_result = self._remote_transfer_coordinator.transfer_remote_to_remote(
+                widget=self.widget,
+                remote_drive_controller=self._remote_drive_controller,
+                locations=remote_locations,
+                destination=destination_location,
+                move=move,
             )
         except Exception as error:
             QMessageBox.warning(
@@ -2716,7 +2767,14 @@ class PaneController(QObject):
             )
             return False
 
-        if not changed:
+        if transfer_result.errors:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Einfügen fehlgeschlagen"),
+                transfer_result.errors[0],
+            )
+
+        if not transfer_result.completed:
             return False
 
         def finalize_remote_to_remote():
@@ -2729,7 +2787,14 @@ class PaneController(QObject):
                 if move
                 else app_tr("PaneController", "{count} Remote-Element(e) kopiert")
             )
-            self.show_operation_feedback(message.format(count=len(changed)))
+            if transfer_result.skipped_count:
+                message = app_tr("PaneController", "{count} Element(e) übertragen, {skipped} übersprungen").format(
+                    count=len(transfer_result.completed),
+                    skipped=transfer_result.skipped_count,
+                )
+            else:
+                message = message.format(count=len(transfer_result.completed))
+            self.show_operation_feedback(message)
 
         QTimer.singleShot(0, finalize_remote_to_remote)
         if move:
