@@ -452,6 +452,123 @@ class RemoteDriveController:
         target_path.write_bytes(file_bytes)
         return target_path
 
+    def upload_local_file_for_web_editing(
+        self,
+        *,
+        connection_id: str,
+        local_path: str | Path,
+        remote_folder_path: str = "/.tablion-temp",
+        preferred_remote_path: str | None = None,
+    ) -> dict:
+        source_path = Path(local_path).expanduser().resolve()
+        if not source_path.exists() or source_path.is_dir():
+            raise OneDriveAuthError("Die lokale Office-Datei konnte nicht gefunden werden.")
+
+        connection = self._ensure_connection_by_id(connection_id)
+        drive_id = str(connection.drive_id or "").strip()
+        if not drive_id:
+            raise OneDriveAuthError("Für die OneDrive-Verbindung ist keine Drive-ID hinterlegt.")
+
+        preferred_path = self._normalize_folder_path(preferred_remote_path) if preferred_remote_path else ""
+        if preferred_path and preferred_path not in {"", "/"}:
+            folder_path = PurePosixPath(preferred_path).parent.as_posix() or "/"
+            if not folder_path.startswith("/"):
+                folder_path = f"/{folder_path}"
+            target_name = PurePosixPath(preferred_path).name or source_path.name
+        else:
+            folder_path = self._normalize_folder_path(remote_folder_path)
+            target_name = self._next_available_name_for_drive(
+                access_token=connection.access_token,
+                drive_id=drive_id,
+                folder_path=folder_path,
+                desired_name=source_path.name,
+            )
+        self._ensure_remote_folder(access_token=connection.access_token, drive_id=drive_id, folder_path=folder_path)
+        uploaded_item = self._onedrive_client.upload_file(
+            access_token=connection.access_token,
+            drive_id=drive_id,
+            parent_path=folder_path,
+            file_name=target_name,
+            content=source_path.read_bytes(),
+        )
+        fetched_item = None
+        web_url = str(uploaded_item.get("webUrl") or "").strip()
+        item_path = self._join_mount_path(folder_path, target_name)
+        if not web_url:
+            fetched_item = self._onedrive_client.get_item(
+                access_token=connection.access_token,
+                drive_id=drive_id,
+                item_path=item_path,
+            )
+            web_url = str(fetched_item.get("webUrl") or "").strip()
+        if not web_url:
+            raise OneDriveAuthError("Die Web-URL fuer die Office-Datei konnte nicht ermittelt werden.")
+        return {
+            "web_url": web_url,
+            "remote_path": item_path,
+            "name": target_name,
+            "connection_id": connection.id,
+            "remote_modified_at": self._timestamp_from_value(
+                uploaded_item.get("lastModifiedDateTime")
+                or (fetched_item or {}).get("lastModifiedDateTime")
+            ),
+        }
+
+    def delete_personal_item_by_path(self, *, connection_id: str, remote_path: str) -> bool:
+        connection = self._ensure_connection_by_id(connection_id)
+        drive_id = str(connection.drive_id or "").strip()
+        if not drive_id:
+            raise OneDriveAuthError("Für die OneDrive-Verbindung ist keine Drive-ID hinterlegt.")
+        target_path = self._normalize_folder_path(remote_path)
+        if target_path in {"", "/"}:
+            return False
+        self._onedrive_client.delete_item(
+            access_token=connection.access_token,
+            drive_id=drive_id,
+            item_path=target_path,
+        )
+        return True
+
+    def get_personal_item_by_path(self, *, connection_id: str, remote_path: str) -> dict:
+        connection = self._ensure_connection_by_id(connection_id)
+        drive_id = str(connection.drive_id or "").strip()
+        if not drive_id:
+            raise OneDriveAuthError("Für die OneDrive-Verbindung ist keine Drive-ID hinterlegt.")
+        target_path = self._normalize_folder_path(remote_path)
+        if target_path in {"", "/"}:
+            raise OneDriveAuthError("Root kann nicht als Office-Web-Datei verwendet werden.")
+        item = self._onedrive_client.get_item(
+            access_token=connection.access_token,
+            drive_id=drive_id,
+            item_path=target_path,
+        )
+        return {
+            "id": str(item.get("id") or "").strip(),
+            "name": str(item.get("name") or "").strip(),
+            "web_url": str(item.get("webUrl") or "").strip(),
+            "remote_path": target_path,
+            "remote_modified_at": self._timestamp_from_value(item.get("lastModifiedDateTime")),
+            "raw": item,
+        }
+
+    def download_personal_item_to_path(self, *, connection_id: str, remote_path: str, local_path: str | Path) -> Path:
+        connection = self._ensure_connection_by_id(connection_id)
+        drive_id = str(connection.drive_id or "").strip()
+        if not drive_id:
+            raise OneDriveAuthError("Für die OneDrive-Verbindung ist keine Drive-ID hinterlegt.")
+        target_path = self._normalize_folder_path(remote_path)
+        if target_path in {"", "/"}:
+            raise OneDriveAuthError("Root kann nicht als Office-Web-Datei geladen werden.")
+        destination = Path(local_path).expanduser()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        file_bytes = self._onedrive_client.download_file(
+            access_token=connection.access_token,
+            drive_id=drive_id,
+            item_path=target_path,
+        )
+        destination.write_bytes(file_bytes)
+        return destination
+
     def _mount_by_id(self, remote_id: str | None) -> RemoteMountDefinition | None:
         key = str(remote_id or "").strip()
         if not key:
@@ -460,6 +577,32 @@ class RemoteDriveController:
             if mount.id == key:
                 return mount
         return None
+
+    def _ensure_connection_by_id(self, connection_id: str):
+        connection = self._connection_settings.get_by_id(connection_id)
+        if connection is None:
+            raise OneDriveAuthError("Die OneDrive-Verbindung wurde nicht gefunden.")
+        if connection.provider != "onedrive":
+            raise OneDriveAuthError("Lokale Office-Web-Bearbeitung wird aktuell nur fuer OneDrive unterstuetzt.")
+        if connection.access_token and connection.access_token_expires_at > time.time() + 30:
+            return connection
+        refreshed = self._auth_service.refresh_access_token(
+            client_id=connection.client_id,
+            tenant_id=connection.tenant_id,
+            refresh_token=connection.refresh_token,
+        )
+        self._connection_settings.update_tokens(
+            connection.id,
+            access_token=refreshed.access_token,
+            refresh_token=refreshed.refresh_token,
+            expires_at=refreshed.expires_at,
+            account_label=refreshed.account_label,
+            drive_id=refreshed.drive_id,
+        )
+        updated = self._connection_settings.get_by_id(connection.id)
+        if updated is None:
+            raise OneDriveAuthError("Verbindung konnte nach Token-Aktualisierung nicht geladen werden.")
+        return updated
 
     def _ensure_connection_for_mount(self, mount: RemoteMountDefinition):
         connection = self._connection_settings.get_by_id(mount.connection_id)
@@ -502,6 +645,72 @@ class RemoteDriveController:
             base = PurePosixPath("/")
         child = (base / child_name).as_posix()
         return child if child.startswith("/") else f"/{child}"
+
+    def _normalize_folder_path(self, raw_path: str) -> str:
+        text = str(raw_path or "").strip() or "/"
+        if not text.startswith("/"):
+            text = f"/{text}"
+        while "//" in text:
+            text = text.replace("//", "/")
+        return text or "/"
+
+    def _ensure_remote_folder(self, *, access_token: str, drive_id: str, folder_path: str) -> None:
+        normalized = self._normalize_folder_path(folder_path)
+        if normalized in {"", "/"}:
+            return
+        current_path = "/"
+        for segment in PurePosixPath(normalized).parts:
+            if segment == "/":
+                continue
+            next_path = self._join_mount_path(current_path, segment)
+            try:
+                item = self._onedrive_client.get_item(
+                    access_token=access_token,
+                    drive_id=drive_id,
+                    item_path=next_path,
+                )
+                if not isinstance(item.get("folder"), dict):
+                    raise OneDriveAuthError(f"Der Remote-Pfad {next_path} ist kein Ordner.")
+            except OneDriveAuthError:
+                self._onedrive_client.create_folder(
+                    access_token=access_token,
+                    drive_id=drive_id,
+                    parent_path=current_path,
+                    folder_name=segment,
+                )
+            current_path = next_path
+
+    def _next_available_name_for_drive(
+        self,
+        *,
+        access_token: str,
+        drive_id: str,
+        folder_path: str,
+        desired_name: str,
+    ) -> str:
+        clean_name = str(desired_name or "").strip() or "Element"
+        try:
+            existing_names = {
+                str(item.get("name") or "").strip().casefold()
+                for item in self._onedrive_client.list_children(
+                    access_token=access_token,
+                    drive_id=drive_id,
+                    item_path=self._normalize_folder_path(folder_path),
+                )
+                if str(item.get("name") or "").strip()
+            }
+        except Exception:
+            existing_names = set()
+        if clean_name.casefold() not in existing_names:
+            return clean_name
+        stem = Path(clean_name).stem or clean_name
+        suffix = Path(clean_name).suffix
+        counter = 2
+        while True:
+            candidate = f"{stem} {counter}{suffix}"
+            if candidate.casefold() not in existing_names:
+                return candidate
+            counter += 1
 
     def _upload_local_path(
         self,
@@ -751,6 +960,12 @@ class RemoteDriveController:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def _timestamp_from_value(self, value) -> float:
+        parsed = self._parse_datetime(value)
+        if parsed is None:
+            return 0.0
+        return parsed.timestamp()
 
     def _cache_root(self) -> Path:
         cache_root = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)

@@ -19,6 +19,10 @@ class EditorSettings:
         self._settings_dialog_width = 920
         self._settings_dialog_height = 620
         self._remote_open_rules = []
+        self._local_office_web_editing_enabled = False
+        self._local_office_web_connection_id = ""
+        self._local_office_web_temp_folder = "/.tablion-temp"
+        self._treat_dot_entries_as_hidden_remote = False
         self.load()
 
     @property
@@ -74,6 +78,22 @@ class EditorSettings:
     @property
     def remote_open_rules(self) -> list[dict]:
         return [dict(item) for item in self._remote_open_rules]
+
+    @property
+    def local_office_web_editing_enabled(self) -> bool:
+        return bool(self._local_office_web_editing_enabled)
+
+    @property
+    def local_office_web_connection_id(self) -> str:
+        return str(self._local_office_web_connection_id)
+
+    @property
+    def local_office_web_temp_folder(self) -> str:
+        return str(self._local_office_web_temp_folder or "/.tablion-temp")
+
+    @property
+    def treat_dot_entries_as_hidden_remote(self) -> bool:
+        return bool(self._treat_dot_entries_as_hidden_remote)
 
     def _normalize_visible_file_tree_columns(self, value) -> list[int]:
         if not isinstance(value, list):
@@ -145,6 +165,11 @@ class EditorSettings:
         )
         self._show_hidden_files = bool(payload.get("show_hidden_files", False))
         self._remote_open_rules = self._normalize_remote_open_rules(payload.get("remote_open_rules", []))
+        self._local_office_web_editing_enabled = bool(payload.get("local_office_web_editing_enabled", False))
+        self._local_office_web_connection_id = str(payload.get("local_office_web_connection_id") or "").strip()
+        temp_folder = str(payload.get("local_office_web_temp_folder") or "/.tablion-temp").strip() or "/.tablion-temp"
+        self._local_office_web_temp_folder = temp_folder if temp_folder.startswith("/") else f"/{temp_folder}"
+        self._treat_dot_entries_as_hidden_remote = bool(payload.get("treat_dot_entries_as_hidden_remote", False))
         try:
             width = int(payload.get("settings_dialog_width", 920))
         except (TypeError, ValueError):
@@ -169,6 +194,10 @@ class EditorSettings:
             "visible_file_tree_columns": list(self._visible_file_tree_columns),
             "show_hidden_files": self._show_hidden_files,
             "remote_open_rules": list(self._remote_open_rules),
+            "local_office_web_editing_enabled": self._local_office_web_editing_enabled,
+            "local_office_web_connection_id": self._local_office_web_connection_id,
+            "local_office_web_temp_folder": self._local_office_web_temp_folder,
+            "treat_dot_entries_as_hidden_remote": self._treat_dot_entries_as_hidden_remote,
             "settings_dialog_width": self._settings_dialog_width,
             "settings_dialog_height": self._settings_dialog_height,
         }
@@ -260,6 +289,36 @@ class EditorSettings:
         if normalized == self._remote_open_rules:
             return
         self._remote_open_rules = normalized
+        self.save()
+
+    def update_local_office_web_editing(
+        self,
+        *,
+        enabled: bool,
+        connection_id: str,
+        temp_folder: str,
+    ) -> None:
+        normalized_enabled = bool(enabled)
+        normalized_connection_id = str(connection_id or "").strip()
+        normalized_temp_folder = str(temp_folder or "/.tablion-temp").strip() or "/.tablion-temp"
+        if not normalized_temp_folder.startswith("/"):
+            normalized_temp_folder = f"/{normalized_temp_folder}"
+        if (
+            normalized_enabled == self._local_office_web_editing_enabled
+            and normalized_connection_id == self._local_office_web_connection_id
+            and normalized_temp_folder == self._local_office_web_temp_folder
+        ):
+            return
+        self._local_office_web_editing_enabled = normalized_enabled
+        self._local_office_web_connection_id = normalized_connection_id
+        self._local_office_web_temp_folder = normalized_temp_folder
+        self.save()
+
+    def update_treat_dot_entries_as_hidden_remote(self, value: bool) -> None:
+        normalized = bool(value)
+        if normalized == self._treat_dot_entries_as_hidden_remote:
+            return
+        self._treat_dot_entries_as_hidden_remote = normalized
         self.save()
 
     def remote_open_rule_for(self, path: str) -> dict | None:

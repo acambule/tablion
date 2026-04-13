@@ -7,6 +7,7 @@ import json
 import copy
 import shutil
 import traceback
+import time
 from datetime import datetime
 from pathlib import Path
 from PySide6.QtGui import QAction, QIcon, QKeySequence
@@ -20,6 +21,7 @@ from debug_log import debug_exception, debug_log, initialize_debug_log
 from localization import app_tr, ask_yes_no, apply_localization, setup_localization
 from models.editor_settings import EditorSettings
 from models.file_system_model import FileSystemModel
+from models.local_office_web_session_store import LocalOfficeWebSessionStore
 from models.navigator import DEFAULT_NAVIGATOR_DATA, NavigatorManager
 from models.remote_connection_settings import RemoteConnectionSettings
 from models.remote_mount_settings import RemoteMountSettings
@@ -43,15 +45,18 @@ class MainWindow(QMainWindow):
         self.remote_connections_path = Path()
         self.remote_mounts_path = Path()
         self.legacy_remote_drives_path = Path()
+        self.local_office_web_sessions_path = Path()
         self.editor_settings = None
         self.remote_connection_settings = None
         self.remote_mount_settings = None
         self.remote_drive_controller = None
+        self.local_office_web_session_store = None
         self.initialize_storage_paths()
         self.editor_settings = EditorSettings(self.editor_settings_path)
         self.remote_connection_settings = RemoteConnectionSettings(self.remote_connections_path, self.legacy_remote_drives_path)
         self.remote_mount_settings = RemoteMountSettings(self.remote_mounts_path, self.legacy_remote_drives_path)
         self.remote_drive_controller = RemoteDriveController(self.remote_connection_settings, self.remote_mount_settings)
+        self.local_office_web_session_store = LocalOfficeWebSessionStore(self.local_office_web_sessions_path)
         initialize_debug_log(self.debug_log_path)
         debug_log("MainWindow.__init__ started")
         debug_log(f"Debug log path: {self.debug_log_path}")
@@ -75,6 +80,9 @@ class MainWindow(QMainWindow):
         self._persisted_once = False
         self._restored_splitter_sizes = False
         self._shutdown_prepared = False
+        self._local_office_sync_check_in_progress = False
+        self._local_office_sync_check_scheduled = False
+        self._last_local_office_sync_check_at = 0.0
 
         self.ui = loader.load(str(ui_path))
         if self.ui is None:
@@ -100,6 +108,7 @@ class MainWindow(QMainWindow):
         self.setup_navigation_toolbar()
         self.setup_navigator()
         self.setup_shortcuts()
+        self.cleanup_stale_local_office_web_sessions()
         self.load_session_state()
 
         QTimer.singleShot(0, self.focus_active_tree_view)
@@ -128,6 +137,7 @@ class MainWindow(QMainWindow):
         self.remote_connections_path = config_dir / 'remote_connections.json'
         self.remote_mounts_path = config_dir / 'remote_mounts.json'
         self.legacy_remote_drives_path = config_dir / 'remote_drives.json'
+        self.local_office_web_sessions_path = state_dir / 'local_office_web_sessions.json'
 
         self.migrate_legacy_json_if_needed()
 
@@ -184,6 +194,7 @@ class MainWindow(QMainWindow):
             plain_tabbing_mode=self.plain_tabbing_mode,
             editor_settings=self.editor_settings,
             remote_drive_controller=self.remote_drive_controller,
+            local_office_web_session_store=self.local_office_web_session_store,
         )
         self.group_controller.initialize_existing_groups()
 
@@ -247,6 +258,139 @@ class MainWindow(QMainWindow):
             self.update_window_title(active_path)
             self._update_temporary_context_notice(active_path)
             self.update_nav_buttons()
+        if _new is not None:
+            self.schedule_local_office_web_sync_check()
+
+    def schedule_local_office_web_sync_check(self):
+        if self._local_office_sync_check_in_progress or self._local_office_sync_check_scheduled:
+            return
+        now = time.time()
+        if now - self._last_local_office_sync_check_at < 2.0:
+            return
+        self._local_office_sync_check_scheduled = True
+        QTimer.singleShot(350, self.sync_local_office_web_sessions_from_remote)
+
+    def sync_local_office_web_sessions_from_remote(self):
+        self._local_office_sync_check_scheduled = False
+        if self._local_office_sync_check_in_progress:
+            return
+        if self.local_office_web_session_store is None or self.remote_drive_controller is None:
+            return
+
+        self._local_office_sync_check_in_progress = True
+        self._last_local_office_sync_check_at = time.time()
+        try:
+            for session in self.local_office_web_session_store.sessions:
+                self._sync_single_local_office_web_session(session)
+        finally:
+            self._local_office_sync_check_in_progress = False
+
+    def _sync_single_local_office_web_session(self, session):
+        try:
+            remote_item = self.remote_drive_controller.get_personal_item_by_path(
+                connection_id=session.connection_id,
+                remote_path=session.remote_path,
+            )
+        except Exception as error:
+            if self._is_missing_remote_item_error(error):
+                self.local_office_web_session_store.remove_session(session.id)
+                return
+            debug_exception("MainWindow._sync_single_local_office_web_session lookup failed", error)
+            return
+
+        remote_modified_at = float(remote_item.get("remote_modified_at") or 0.0)
+        if remote_modified_at <= float(session.remote_modified_at or 0.0) + 1e-6:
+            return
+        if remote_modified_at <= float(session.last_prompted_remote_modified_at or 0.0) + 1e-6:
+            return
+
+        local_path = Path(str(session.local_path or "")).expanduser()
+        local_exists = local_path.exists()
+        local_changed_since_open = False
+        if local_exists:
+            try:
+                local_changed_since_open = local_path.stat().st_mtime > float(session.local_mtime_at_opened or 0.0) + 1e-6
+            except OSError:
+                local_changed_since_open = False
+
+        file_name = local_path.name or str(remote_item.get("name") or "").strip() or app_tr("MainWindow", "Datei")
+        prompt_text = app_tr(
+            "MainWindow",
+            "Die Web-Version von „{name}“ wurde geändert. Soll die Datei lokal am ursprünglichen Ort aktualisiert werden?",
+        ).format(name=file_name)
+        if local_changed_since_open:
+            prompt_text = app_tr(
+                "MainWindow",
+                "Die Web-Version von „{name}“ wurde geändert. Die lokale Datei wurde seit dem Hochladen ebenfalls geändert. Soll die Remote-Version trotzdem lokal darüber gespeichert werden?",
+            ).format(name=file_name)
+        elif not local_exists:
+            prompt_text = app_tr(
+                "MainWindow",
+                "Die Web-Version von „{name}“ wurde geändert. Die lokale Datei fehlt derzeit. Soll sie wieder am ursprünglichen Ort hergestellt werden?",
+            ).format(name=file_name)
+
+        answer = QMessageBox.question(
+            self.ui,
+            app_tr("MainWindow", "Office-Web-Änderungen übernehmen"),
+            prompt_text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.local_office_web_session_store.update_session(
+                session.id,
+                last_prompted_remote_modified_at=remote_modified_at,
+            )
+            return
+
+        try:
+            restored_path = self.remote_drive_controller.download_personal_item_to_path(
+                connection_id=session.connection_id,
+                remote_path=session.remote_path,
+                local_path=local_path,
+            )
+            try:
+                restored_mtime = restored_path.stat().st_mtime
+            except OSError:
+                restored_mtime = time.time()
+            self.local_office_web_session_store.update_session(
+                session.id,
+                remote_modified_at=remote_modified_at,
+                last_prompted_remote_modified_at=0.0,
+                local_mtime_at_opened=restored_mtime,
+                last_opened_at=time.time(),
+            )
+            status_bar = self.ui.statusBar()
+            if status_bar is not None:
+                status_bar.showMessage(
+                    app_tr("MainWindow", "Office-Web-Änderungen wurden lokal übernommen."),
+                    5000,
+                )
+        except Exception as error:
+            debug_exception("MainWindow._sync_single_local_office_web_session download failed", error)
+            QMessageBox.warning(
+                self.ui,
+                app_tr("MainWindow", "Office-Web-Änderungen übernehmen"),
+                app_tr("MainWindow", "Die geänderte Datei konnte nicht lokal aktualisiert werden."),
+            )
+
+    def _is_missing_remote_item_error(self, error) -> bool:
+        message = str(error or "").strip()
+        if not message:
+            return False
+        if "itemnotfound" in message.casefold() or "not found" in message.casefold() or '"status":404' in message.replace(" ", ""):
+            return True
+        try:
+            payload = json.loads(message)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        error_payload = payload.get("error")
+        if not isinstance(error_payload, dict):
+            return False
+        code = str(error_payload.get("code") or "").strip().casefold()
+        return code in {"itemnotfound", "resourceNotFound".casefold()}
 
     def on_group_tab_changed(self, _index):
         self.render_active_group_pane()
@@ -690,6 +834,22 @@ class MainWindow(QMainWindow):
 
         self.apply_session_payload(payload)
 
+    def cleanup_stale_local_office_web_sessions(self, max_age_days: int = 7):
+        if self.local_office_web_session_store is None or self.remote_drive_controller is None:
+            return
+        stale_sessions = self.local_office_web_session_store.stale_sessions(
+            older_than_seconds=max_age_days * 24 * 60 * 60
+        )
+        for session in stale_sessions:
+            try:
+                self.remote_drive_controller.delete_personal_item_by_path(
+                    connection_id=session.connection_id,
+                    remote_path=session.remote_path,
+                )
+            except Exception:
+                pass
+            self.local_office_web_session_store.remove_session(session.id)
+
     def export_session_bundle(self, target_path: Path):
         session_payload = self.build_session_payload()
         if session_payload is None:
@@ -1015,6 +1175,17 @@ class MainWindow(QMainWindow):
         if active_pane and hasattr(active_pane, "refresh_current_directory"):
             active_pane.refresh_current_directory(force_rescan=True)
 
+    def refresh_all_panes(self):
+        if self.group_controller is None:
+            return
+        for pane in list(self.group_controller.group_panes_by_page.values()):
+            if pane is None or not hasattr(pane, "refresh_current_directory"):
+                continue
+            try:
+                pane.refresh_current_directory(force_rescan=True)
+            except RuntimeError:
+                continue
+
     def focus_active_tree_view(self):
         active_pane = self.get_active_pane()
         tree_view = getattr(active_pane, "tree_view", None) if active_pane else None
@@ -1047,6 +1218,8 @@ class MainWindow(QMainWindow):
         if self._shutdown_prepared:
             return
         self._shutdown_prepared = True
+
+        self.cleanup_stale_local_office_web_sessions()
 
         try:
             self.ui.removeEventFilter(self)
@@ -1132,6 +1305,7 @@ class MainWindow(QMainWindow):
             )
             self._settings_dialog.settingsChanged.connect(self.apply_tab_close_icon_settings)
             self._settings_dialog.settingsChanged.connect(self.refresh_navigator)
+            self._settings_dialog.settingsChanged.connect(self.refresh_all_panes)
             self._settings_dialog.languagePreferenceChanged.connect(self.on_language_preference_changed)
             self._settings_dialog.sessionExportRequested.connect(self.on_session_export_requested)
             self._settings_dialog.sessionImportRequested.connect(self.on_session_import_requested)

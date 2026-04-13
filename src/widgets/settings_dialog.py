@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -126,6 +127,10 @@ class SettingsDialog(QDialog):
         self._remote_open_command_line_edit = None
         self._remote_open_arguments_line_edit = None
         self._remote_open_rules_table = None
+        self._local_office_web_enabled_checkbox = None
+        self._local_office_web_connection_combo = None
+        self._local_office_web_temp_folder_line_edit = None
+        self._remote_dot_hidden_checkbox = None
 
         if self._categories_list and self._category_stack:
             self._categories_list.currentRowChanged.connect(self._category_stack.setCurrentIndex)
@@ -138,6 +143,7 @@ class SettingsDialog(QDialog):
         self._rebuild_mount_table()
         self._rebuild_mount_connection_combo()
         self._rebuild_remote_open_rules_table()
+        self._rebuild_local_office_web_connection_combo()
 
         if self._categories_list and self._category_stack:
             self._categories_list.setCurrentRow(0)
@@ -169,6 +175,24 @@ class SettingsDialog(QDialog):
 
         if self._show_file_tab_close_icons_checkbox:
             self._show_file_tab_close_icons_checkbox.setChecked(self._editor_settings.show_file_tab_close_icons)
+        if self._local_office_web_enabled_checkbox is not None:
+            self._local_office_web_enabled_checkbox.setChecked(
+                self._editor_settings.local_office_web_editing_enabled
+            )
+        if self._local_office_web_temp_folder_line_edit is not None:
+            self._local_office_web_temp_folder_line_edit.setText(
+                self._editor_settings.local_office_web_temp_folder
+            )
+        if self._local_office_web_connection_combo is not None:
+            connection_index = self._local_office_web_connection_combo.findData(
+                self._editor_settings.local_office_web_connection_id
+            )
+            if connection_index >= 0:
+                self._local_office_web_connection_combo.setCurrentIndex(connection_index)
+        if self._remote_dot_hidden_checkbox is not None:
+            self._remote_dot_hidden_checkbox.setChecked(
+                bool(getattr(self._editor_settings, "treat_dot_entries_as_hidden_remote", False))
+            )
 
         if self._button_box:
             apply_button = self._button_box.button(QDialogButtonBox.StandardButton.Apply)
@@ -206,6 +230,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_connections_tab(), app_tr("SettingsDialog", "Verbindungen"))
         tabs.addTab(self._build_mounts_tab(), app_tr("SettingsDialog", "Einträge"))
         tabs.addTab(self._build_remote_open_tab(), app_tr("SettingsDialog", "Dateizuordnungen"))
+        tabs.addTab(self._build_local_office_web_tab(), app_tr("SettingsDialog", "Optionen"))
         layout.addWidget(tabs)
 
         self._category_stack.addWidget(page)
@@ -475,6 +500,76 @@ class SettingsDialog(QDialog):
         self._remote_open_arguments_line_edit.textChanged.connect(lambda _="": self._sync_selected_remote_open_rule_from_form())
         return page
 
+    def _build_local_office_web_tab(self) -> QWidget:
+        page = QWidget(self)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        office_group = QGroupBox(app_tr("SettingsDialog", "Lokale Bearbeitung"), page)
+        office_layout = QFormLayout(office_group)
+        office_layout.setContentsMargins(12, 12, 12, 12)
+        office_layout.setHorizontalSpacing(12)
+        office_layout.setVerticalSpacing(12)
+
+        self._local_office_web_enabled_checkbox = QCheckBox(
+            app_tr("SettingsDialog", "Lokale Word-/Excel-Dateien ueber persoenliches OneDrive-Web bearbeiten"),
+            office_group,
+        )
+        office_layout.addRow("", self._local_office_web_enabled_checkbox)
+
+        self._local_office_web_connection_combo = QComboBox(office_group)
+        office_layout.addRow(app_tr("SettingsDialog", "Persoenliche OneDrive-Verbindung"), self._local_office_web_connection_combo)
+
+        self._local_office_web_temp_folder_line_edit = QLineEdit(office_group)
+        self._local_office_web_temp_folder_line_edit.setPlaceholderText("/.tablion-temp")
+        office_layout.addRow(app_tr("SettingsDialog", "Temporärer Remote-Ordner"), self._local_office_web_temp_folder_line_edit)
+        layout.addWidget(office_group)
+
+        info_label = QLabel(
+            app_tr(
+                "SettingsDialog",
+                "Lokale Office-Dateien werden in das persoenliche OneDrive der gewaehlten Verbindung unter /.tablion-temp oder einem eigenen Unterordner hochgeladen und dann ueber ihre Web-URL in der PWA geoeffnet. Team- oder SharePoint-Ziele werden hier bewusst nicht verwendet.",
+            ),
+            page,
+        )
+        info_label.setWordWrap(True)
+        info_label.setContentsMargins(10, 8, 10, 8)
+        info_label.setStyleSheet(
+            "QLabel {"
+            " background-color: rgba(120, 120, 120, 0.10);"
+            " border: 1px solid rgba(160, 160, 160, 0.28);"
+            " border-radius: 6px;"
+            " padding: 8px;"
+            "}"
+        )
+        layout.addWidget(info_label)
+
+        remote_display_group = QGroupBox(app_tr("SettingsDialog", "Remote-Anzeige"), page)
+        remote_display_layout = QVBoxLayout(remote_display_group)
+        remote_display_layout.setContentsMargins(12, 12, 12, 12)
+        remote_display_layout.setSpacing(8)
+
+        self._remote_dot_hidden_checkbox = QCheckBox(
+            app_tr("SettingsDialog", ".-Notation als versteckte Dateien/Ordner behandeln"),
+            remote_display_group,
+        )
+        remote_display_layout.addWidget(self._remote_dot_hidden_checkbox)
+
+        remote_hint_label = QLabel(
+            app_tr(
+                "SettingsDialog",
+                "Wenn aktiv, werden Remote-Einträge wie .git oder .env über den normalen Schalter für versteckte Dateien behandelt: ausgeblendet oder bei eingeblendeten versteckten Dateien abgedunkelt dargestellt.",
+            ),
+            remote_display_group,
+        )
+        remote_hint_label.setWordWrap(True)
+        remote_display_layout.addWidget(remote_hint_label)
+        layout.addWidget(remote_display_group)
+
+        layout.addStretch(1)
+        return page
+
     def _load_connection_rows(self) -> None:
         self._connection_rows = []
         if self._remote_connection_settings is None:
@@ -633,6 +728,26 @@ class SettingsDialog(QDialog):
             self._mount_connection_combo.addItem(label, item.get("id"))
         self._apply_mount_icon_suggestion()
         self._populate_team_combo()
+
+    def _rebuild_local_office_web_connection_combo(self) -> None:
+        if self._local_office_web_connection_combo is None:
+            return
+        current_connection_id = str(self._local_office_web_connection_combo.currentData() or "").strip()
+        self._local_office_web_connection_combo.clear()
+        for item in self._connection_rows:
+            if str(item.get("provider") or "").strip().lower() != "onedrive":
+                continue
+            label = str(item.get("display_name") or "")
+            account = str(item.get("account_label") or "")
+            if account:
+                label = f"{label} - {account}"
+            self._local_office_web_connection_combo.addItem(label, item.get("id"))
+        preferred_id = self._editor_settings.local_office_web_connection_id if self._editor_settings is not None else ""
+        target_id = preferred_id or current_connection_id
+        if target_id:
+            index = self._local_office_web_connection_combo.findData(target_id)
+            if index >= 0:
+                self._local_office_web_connection_combo.setCurrentIndex(index)
 
     def _rebuild_remote_open_rules_table(self) -> None:
         if self._remote_open_rules_table is None:
@@ -1009,6 +1124,7 @@ class SettingsDialog(QDialog):
         )
         self._rebuild_connection_table()
         self._rebuild_mount_connection_combo()
+        self._rebuild_local_office_web_connection_combo()
         self._apply_mount_icon_suggestion()
         self._connection_display_name_line_edit.clear()
         if self._connection_client_id_line_edit:
@@ -1074,6 +1190,7 @@ class SettingsDialog(QDialog):
         self._team_options_by_connection.pop(str(connection.get("id") or "").strip(), None)
         self._rebuild_connection_table()
         self._rebuild_mount_connection_combo()
+        self._rebuild_local_office_web_connection_combo()
         self._rebuild_mount_table()
         self._connection_table.selectRow(row)
         self._update_connection_status_details(self._connection_rows[row])
@@ -1163,6 +1280,7 @@ class SettingsDialog(QDialog):
         self._mount_rows = [item for item in self._mount_rows if str(item.get("connection_id") or "") != connection_id]
         self._rebuild_connection_table()
         self._rebuild_mount_connection_combo()
+        self._rebuild_local_office_web_connection_combo()
         self._rebuild_mount_table()
 
     def _remove_selected_mount(self) -> None:
@@ -1255,6 +1373,14 @@ class SettingsDialog(QDialog):
         if self._show_file_tab_close_icons_checkbox:
             self._editor_settings.update_show_file_tab_close_icons(self._show_file_tab_close_icons_checkbox.isChecked())
         self._editor_settings.update_remote_open_rules(self._remote_open_rule_rows)
+        self._editor_settings.update_local_office_web_editing(
+            enabled=self._local_office_web_enabled_checkbox.isChecked() if self._local_office_web_enabled_checkbox else False,
+            connection_id=str(self._local_office_web_connection_combo.currentData() or "").strip() if self._local_office_web_connection_combo else "",
+            temp_folder=self._local_office_web_temp_folder_line_edit.text().strip() if self._local_office_web_temp_folder_line_edit else "/.tablion-temp",
+        )
+        self._editor_settings.update_treat_dot_entries_as_hidden_remote(
+            self._remote_dot_hidden_checkbox.isChecked() if self._remote_dot_hidden_checkbox else False
+        )
         if self._remote_connection_settings is not None:
             self._remote_connection_settings.replace_all(self._connection_rows)
         if self._remote_mount_settings is not None:

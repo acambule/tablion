@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QModelIndex, QMimeData, Qt
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel
 
 from localization import app_tr
@@ -20,6 +21,7 @@ class RemoteFileItem:
     size: int | None = None
     modified_at: datetime | None = None
     web_url: str = ""
+    is_hidden: bool = False
 
 
 class RemoteFileTreeModel(QStandardItemModel):
@@ -29,6 +31,7 @@ class RemoteFileTreeModel(QStandardItemModel):
     ROLE_WEB_URL = Qt.ItemDataRole.UserRole + 102
     ROLE_CHILDREN_LOADED = Qt.ItemDataRole.UserRole + 103
     ROLE_PLACEHOLDER = Qt.ItemDataRole.UserRole + 104
+    ROLE_IS_HIDDEN = Qt.ItemDataRole.UserRole + 105
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -133,23 +136,35 @@ class RemoteFileTreeModel(QStandardItemModel):
         name_item.setData(entry.location.path, self.ROLE_PATH)
         name_item.setData(entry.is_dir, self.ROLE_IS_DIR)
         name_item.setData(entry.web_url, self.ROLE_WEB_URL)
+        name_item.setData(entry.is_hidden, self.ROLE_IS_HIDDEN)
         name_item.setData(False, self.ROLE_CHILDREN_LOADED)
         name_item.setEditable(False)
+        if entry.is_hidden:
+            name_item.setForeground(QBrush(QColor(140, 140, 140)))
 
         size_item = QStandardItem(self._size_text(entry))
         size_item.setData(entry.location.path, self.ROLE_PATH)
         size_item.setData(entry.is_dir, self.ROLE_IS_DIR)
+        size_item.setData(entry.is_hidden, self.ROLE_IS_HIDDEN)
         size_item.setEditable(False)
+        if entry.is_hidden:
+            size_item.setForeground(QBrush(QColor(140, 140, 140)))
 
         type_item = QStandardItem(app_tr("PaneController", "Ordner") if entry.is_dir else (Path(entry.name).suffix.lstrip(".").upper() or app_tr("PaneController", "Datei")))
         type_item.setData(entry.location.path, self.ROLE_PATH)
         type_item.setData(entry.is_dir, self.ROLE_IS_DIR)
+        type_item.setData(entry.is_hidden, self.ROLE_IS_HIDDEN)
         type_item.setEditable(False)
+        if entry.is_hidden:
+            type_item.setForeground(QBrush(QColor(140, 140, 140)))
 
         modified_item = QStandardItem(entry.modified_at.strftime("%d.%m.%y %H:%M") if entry.modified_at else "")
         modified_item.setData(entry.location.path, self.ROLE_PATH)
         modified_item.setData(entry.is_dir, self.ROLE_IS_DIR)
+        modified_item.setData(entry.is_hidden, self.ROLE_IS_HIDDEN)
         modified_item.setEditable(False)
+        if entry.is_hidden:
+            modified_item.setForeground(QBrush(QColor(140, 140, 140)))
         if entry.is_dir:
             name_item.appendRow(self._placeholder_row(entry.location))
         return [name_item, size_item, type_item, modified_item]

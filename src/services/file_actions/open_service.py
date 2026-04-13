@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QProcess, QUrl
 from PySide6.QtGui import QDesktopServices
 
-from utils.open_with import launch_with_application
+from utils.open_with import default_application_for_path, launch_with_application
 
 
 class OpenService:
@@ -24,6 +24,9 @@ class OpenService:
             return False
 
     def open_default(self, path: str) -> None:
+        application = default_application_for_path(path)
+        if application is not None and launch_with_application(application, path):
+            return
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def open_with_application(self, application, path: str) -> bool:

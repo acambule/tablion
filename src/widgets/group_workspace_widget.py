@@ -13,7 +13,14 @@ class GroupWorkspaceWidget(QWidget):
     navigationStateChanged = Signal(bool, bool)
     groupRequested = Signal()
 
-    def __init__(self, file_system_model, parent=None, editor_settings: Optional[EditorSettings] = None, remote_drive_controller=None):
+    def __init__(
+        self,
+        file_system_model,
+        parent=None,
+        editor_settings: Optional[EditorSettings] = None,
+        remote_drive_controller=None,
+        local_office_web_session_store=None,
+    ):
         super().__init__(parent)
         self.widget = self
         self._model = file_system_model
@@ -23,6 +30,7 @@ class GroupWorkspaceWidget(QWidget):
         self._dispose_prepared = False
         self._editor_settings = editor_settings
         self._remote_drive_controller = remote_drive_controller
+        self._local_office_web_session_store = local_office_web_session_store
         self._panes = {}
 
         self._layout = QVBoxLayout(self)
@@ -45,6 +53,7 @@ class GroupWorkspaceWidget(QWidget):
             parent=self,
             editor_settings=self._editor_settings,
             remote_drive_controller=self._remote_drive_controller,
+            local_office_web_session_store=self._local_office_web_session_store,
         )
         pane.widget.setParent(None)
         pane.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)

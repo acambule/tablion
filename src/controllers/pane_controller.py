@@ -21,7 +21,7 @@ from controllers.remote_drive_controller import RemoteDriveController
 from controllers.view_adapters import IconViewAdapter, TreeViewAdapter
 from domain.filesystem import PaneLocation
 from models.file_operations import FileOperations
-from models.remote_file_tree_model import RemoteFileTreeModel
+from models.remote_file_tree_model import RemoteFileItem, RemoteFileTreeModel
 from services.file_actions import (
     ArkDropService,
     ArchiveService,
@@ -237,7 +237,14 @@ class PaneController(QObject):
                     pass
                 self._directory_loaded_handler = None
 
-    def __init__(self, file_system_model, parent=None, editor_settings=None, remote_drive_controller: RemoteDriveController | None = None):
+    def __init__(
+        self,
+        file_system_model,
+        parent=None,
+        editor_settings=None,
+        remote_drive_controller: RemoteDriveController | None = None,
+        local_office_web_session_store=None,
+    ):
         super().__init__(parent)
         loader = QUiLoader()
         pane_ui_path = Path(__file__).resolve().parent.parent / "ui" / "pane.ui"
@@ -295,6 +302,7 @@ class PaneController(QObject):
         self._action_reset_view = None
         self._action_show_hidden_files = None
         self._editor_settings = editor_settings
+        self._local_office_web_session_store = local_office_web_session_store
         self.tab_states: list[TabState] = []
         self.active_tab_index = -1
         self._restoring_tab_switch = False
@@ -400,6 +408,34 @@ class PaneController(QObject):
         if location.is_remote and self._remote_drive_controller is not None:
             return self._remote_drive_controller.display_name_for_location(location)
         return ""
+
+    def _treat_remote_dot_entries_as_hidden(self) -> bool:
+        return bool(getattr(self._editor_settings, "treat_dot_entries_as_hidden_remote", False))
+
+    def _is_remote_hidden_entry(self, entry) -> bool:
+        if not self._treat_remote_dot_entries_as_hidden():
+            return False
+        name = str(getattr(entry, "name", "") or "").strip()
+        return bool(name) and name.startswith(".") and name not in {".", ".."}
+
+    def _filtered_remote_entries(self, entries):
+        filtered = []
+        for entry in entries or []:
+            is_hidden = self._is_remote_hidden_entry(entry)
+            if is_hidden and not self._show_hidden_files:
+                continue
+            if is_hidden and not getattr(entry, "is_hidden", False):
+                entry = RemoteFileItem(
+                    name=entry.name,
+                    location=entry.location,
+                    is_dir=entry.is_dir,
+                    size=entry.size,
+                    modified_at=entry.modified_at,
+                    web_url=entry.web_url,
+                    is_hidden=True,
+                )
+            filtered.append(entry)
+        return filtered
 
     def setup_tab_bar_host(self):
         if self.tab_bar_host.layout() is None:
@@ -802,8 +838,6 @@ class PaneController(QObject):
         menu.addSeparator()
         action_show_hidden = menu.addAction(app_tr("PaneController", "Versteckte Dateien anzeigen"))
         action_show_hidden.setCheckable(True)
-        action_show_hidden.setShortcut(QKeySequence("Ctrl+H"))
-        action_show_hidden.setShortcutVisibleInContextMenu(True)
         action_show_hidden.setChecked(self._show_hidden_files)
         self._action_show_hidden_files = action_show_hidden
 
@@ -944,7 +978,7 @@ class PaneController(QObject):
             self.show_operation_feedback(str(error))
             return
 
-        self._remote_model.set_children_for_index(index, entries)
+        self._remote_model.set_children_for_index(index, self._filtered_remote_entries(entries))
         self.apply_current_sort()
         self.optimize_columns()
 
@@ -1270,7 +1304,7 @@ class PaneController(QObject):
                 if event.key() == Qt.Key.Key_F5:
                     self.refresh_current_directory(force_rescan=True)
                     return True
-                if event.key() == Qt.Key.Key_H and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                if event.key() == Qt.Key.Key_H and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
                     self.toggle_show_hidden_files()
                     return True
                 if event.key() == Qt.Key.Key_F2:
@@ -1326,7 +1360,7 @@ class PaneController(QObject):
                 if event.key() == Qt.Key.Key_F5:
                     self.refresh_current_directory(force_rescan=True)
                     return True
-                if event.key() == Qt.Key.Key_H and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                if event.key() == Qt.Key.Key_H and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
                     self.toggle_show_hidden_files()
                     return True
                 if event.key() == Qt.Key.Key_F2:
@@ -1693,7 +1727,9 @@ class PaneController(QObject):
             self.navigate_to(path)
             return
 
-        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        if self._open_local_file_via_office_web(path):
+            return
+        self._open_service.open_default(path)
 
     _EDITABLE_EXTENSIONS = {
         ".desktop",
@@ -1718,6 +1754,14 @@ class PaneController(QObject):
         ".sh",
         ".appimage",
         ".run",
+    }
+    _LOCAL_OFFICE_WEB_EXTENSIONS = {
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".ppt",
+        ".pptx",
     }
 
     def selected_paths(self):
@@ -1841,26 +1885,21 @@ class PaneController(QObject):
             return ""
         return str(active_model.fileUrl(index) or "").strip()
 
-    def _open_remote_file_via_rule(self, location: PaneLocation) -> bool:
+    def _open_url_via_rule(self, path_hint: str, remote_url: str) -> bool:
         if self._editor_settings is None:
             return False
-        rule = self._editor_settings.remote_open_rule_for(location.path)
+        rule = self._editor_settings.remote_open_rule_for(path_hint)
         if not rule:
             return False
-        remote_url = self._selected_remote_file_url(location)
-        if not remote_url:
-            return False
-
         command = str(rule.get("command") or "").strip()
         arguments = str(rule.get("arguments") or "").strip()
         if not command:
             return False
-
         if arguments:
             argument_text = (
                 arguments.replace("{url}", remote_url)
-                .replace("{path}", location.path)
-                .replace("{name}", Path(location.path).name)
+                .replace("{path}", path_hint)
+                .replace("{name}", Path(path_hint).name)
             )
             args = shlex.split(argument_text)
         else:
@@ -1869,6 +1908,73 @@ class PaneController(QObject):
             return bool(QProcess.startDetached(command, args))
         except Exception:
             return False
+
+    def _open_remote_file_via_rule(self, location: PaneLocation) -> bool:
+        remote_url = self._selected_remote_file_url(location)
+        if not remote_url:
+            return False
+        return self._open_url_via_rule(location.path, remote_url)
+
+    def _local_office_web_editing_enabled_for(self, path: str) -> bool:
+        if self._editor_settings is None or self._remote_drive_controller is None:
+            return False
+        if not self._editor_settings.local_office_web_editing_enabled:
+            return False
+        if not self._editor_settings.local_office_web_connection_id:
+            return False
+        return Path(path).suffix.lower() in self._LOCAL_OFFICE_WEB_EXTENSIONS
+
+    def _open_local_file_via_office_web(self, path: str) -> bool:
+        if not self._local_office_web_editing_enabled_for(path):
+            return False
+        existing_session = None
+        if self._local_office_web_session_store is not None:
+            try:
+                existing_session = self._local_office_web_session_store.find_session(
+                    local_path=path,
+                    connection_id=self._editor_settings.local_office_web_connection_id,
+                )
+            except Exception:
+                existing_session = None
+        try:
+            upload_result = self._remote_drive_controller.upload_local_file_for_web_editing(
+                connection_id=self._editor_settings.local_office_web_connection_id,
+                local_path=path,
+                remote_folder_path=self._editor_settings.local_office_web_temp_folder,
+                preferred_remote_path=existing_session.remote_path if existing_session is not None else None,
+            )
+        except Exception as error:
+            QMessageBox.warning(
+                self.widget,
+                app_tr("PaneController", "Office-Web-Bearbeitung fehlgeschlagen"),
+                str(error),
+            )
+            return True
+
+        remote_url = str(upload_result.get("web_url") or "").strip()
+        if self._local_office_web_session_store is not None:
+            try:
+                local_mtime = 0.0
+                try:
+                    local_mtime = Path(path).stat().st_mtime
+                except OSError:
+                    local_mtime = 0.0
+                self._local_office_web_session_store.add_session(
+                    local_path=path,
+                    connection_id=str(upload_result.get("connection_id") or self._editor_settings.local_office_web_connection_id),
+                    remote_path=str(upload_result.get("remote_path") or ""),
+                    web_url=remote_url,
+                    local_mtime_at_opened=local_mtime,
+                    remote_modified_at=float(upload_result.get("remote_modified_at") or 0.0),
+                )
+            except Exception:
+                pass
+        if not remote_url:
+            return True
+        if self._open_url_via_rule(path, remote_url):
+            return True
+        QDesktopServices.openUrl(QUrl(remote_url))
+        return True
 
     def _open_remote_file_in_browser(self, location: PaneLocation) -> bool:
         remote_url = self._selected_remote_file_url(location)
@@ -1986,6 +2092,8 @@ class PaneController(QObject):
             return
         if target_path.is_dir():
             self.navigate_to(target)
+            return
+        if self._open_local_file_via_office_web(target):
             return
         if self._is_application_target(target):
             behavior = "start"
@@ -2650,19 +2758,13 @@ class PaneController(QObject):
             if move and clear_clipboard_on_success:
                 QApplication.clipboard().clear()
                 self.clear_cut_state()
-            message = (
-                app_tr("PaneController", "{count} Element(e) nach Remote verschoben")
-                if move
-                else app_tr("PaneController", "{count} Element(e) nach Remote kopiert")
-            )
-            if transfer_result.skipped_count:
-                message = app_tr("PaneController", "{count} Element(e) übertragen, {skipped} übersprungen").format(
-                    count=len(transfer_result.completed),
-                    skipped=transfer_result.skipped_count,
+            self.show_operation_feedback(
+                self._remote_transfer_coordinator.feedback_message(
+                    transfer_result,
+                    move=move,
+                    direction="local_to_remote",
                 )
-            else:
-                message = message.format(count=len(transfer_result.completed))
-            self.show_operation_feedback(message)
+            )
 
         QTimer.singleShot(0, finalize_local_to_remote)
         return True
@@ -2714,19 +2816,13 @@ class PaneController(QObject):
             if move and clear_clipboard_on_success:
                 QApplication.clipboard().clear()
                 self.clear_cut_state()
-            message = (
-                app_tr("PaneController", "{count} Remote-Element(e) lokal verschoben")
-                if move
-                else app_tr("PaneController", "{count} Remote-Element(e) lokal kopiert")
-            )
-            if transfer_result.skipped_count:
-                message = app_tr("PaneController", "{count} Element(e) übertragen, {skipped} übersprungen").format(
-                    count=len(transfer_result.completed),
-                    skipped=transfer_result.skipped_count,
+            self.show_operation_feedback(
+                self._remote_transfer_coordinator.feedback_message(
+                    transfer_result,
+                    move=move,
+                    direction="remote_to_local",
                 )
-            else:
-                message = message.format(count=len(transfer_result.completed))
-            self.show_operation_feedback(message)
+            )
 
         QTimer.singleShot(0, finalize_remote_to_local)
         if move:
@@ -2782,19 +2878,13 @@ class PaneController(QObject):
                 QApplication.clipboard().clear()
                 self.clear_cut_state()
             self.refresh_current_directory()
-            message = (
-                app_tr("PaneController", "{count} Remote-Element(e) verschoben")
-                if move
-                else app_tr("PaneController", "{count} Remote-Element(e) kopiert")
-            )
-            if transfer_result.skipped_count:
-                message = app_tr("PaneController", "{count} Element(e) übertragen, {skipped} übersprungen").format(
-                    count=len(transfer_result.completed),
-                    skipped=transfer_result.skipped_count,
+            self.show_operation_feedback(
+                self._remote_transfer_coordinator.feedback_message(
+                    transfer_result,
+                    move=move,
+                    direction="remote_to_remote",
                 )
-            else:
-                message = message.format(count=len(transfer_result.completed))
-            self.show_operation_feedback(message)
+            )
 
         QTimer.singleShot(0, finalize_remote_to_remote)
         if move:
@@ -3829,7 +3919,9 @@ class PaneController(QObject):
 
         if not Path(clean_path).exists():
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(clean_path))
+        if self._open_local_file_via_office_web(clean_path):
+            return
+        self._open_service.open_default(clean_path)
 
     def navigate_to(self, path, push_history=True):
         if isinstance(path, PaneLocation):
@@ -3898,7 +3990,7 @@ class PaneController(QObject):
             except Exception as error:
                 self.show_operation_feedback(str(error))
                 return
-            self._remote_model.set_directory_entries(location, entries)
+            self._remote_model.set_directory_entries(location, self._filtered_remote_entries(entries))
             self._apply_browser_model(self._remote_model)
             self._set_remote_view_interaction_enabled(True)
             for view in (self.tree_view, self.icon_view):
