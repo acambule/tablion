@@ -221,6 +221,10 @@
     <message><source>Tablion wurde auf Werkseinstellung zurückgesetzt.</source><translation>Tablion has been reset to factory settings.</translation></message>
     <message><source>Zurücksetzen auf Werkseinstellung ist fehlgeschlagen.</source><translation>Reset to factory settings failed.</translation></message>
     <message><source>Hinweis: Im temporären Verzeichnis wird dauerhaft gelöscht.</source><translation>Note: In temporary directories, items are deleted permanently.</translation></message>
+    <message><source>Datei</source><translation>File</translation></message>
+    <message><source>Office-Web-Änderungen übernehmen</source><translation>Apply Office web changes</translation></message>
+    <message><source>Office-Web-Änderungen wurden lokal übernommen.</source><translation>Office web changes were applied locally.</translation></message>
+    <message><source>Die geänderte Datei konnte nicht lokal aktualisiert werden.</source><translation>The changed file could not be updated locally.</translation></message>
   </context>
 
   <context>
@@ -295,6 +299,13 @@
     <message><source>Archiv entpackt: {name}</source><translation>Archive extracted: {name}</translation></message>
     <message><source>Archiv entpackt: {count} Elemente</source><translation>Archive extracted: {count} items</translation></message>
     <message><source>Zielordner zum Entpacken wählen</source><translation>Select target folder for extraction</translation></message>
+    <message><source>Suchen</source><translation>Search</translation></message>
+    <message><source>Suche schließen</source><translation>Close search</translation></message>
+    <message><source>Dateien und Ordner rekursiv suchen</source><translation>Search files and folders recursively</translation></message>
+    <message><source>Im Browser öffnen</source><translation>Open in browser</translation></message>
+    <message><source>Lokal öffnen</source><translation>Open locally</translation></message>
+    <message><source>Lokal öffnen mit...</source><translation>Open locally with...</translation></message>
+    <message><source>Office-Web-Bearbeitung fehlgeschlagen</source><translation>Office web editing failed</translation></message>
   </context>
 
   <context>
@@ -415,6 +426,8 @@
     <message><source>Ausblenden</source><translation>Hide</translation></message>
     <message><source>Einblenden</source><translation>Show</translation></message>
     <message><source>Alle einblenden</source><translation>Show all</translation></message>
+    <message><source>Alle ausblenden</source><translation>Hide all</translation></message>
+    <message><source>Bearbeiten</source><translation>Edit</translation></message>
     <message><source>Favorit umbenennen</source><translation>Rename favorite</translation></message>
     <message><source>Name:</source><translation>Name:</translation></message>
   </context>
@@ -442,6 +455,72 @@
     <message><source>Abbrechen</source><translation>Cancel</translation></message>
     <message><source>Anwenden</source><translation>Apply</translation></message>
     <message><source>OK</source><translation>OK</translation></message>
+    <message><source>Verbindungen enthalten Authentifizierung und Kontodaten. Einträge im Navigator werden erst aus Einträgen erzeugt.</source><translation>Connections contain authentication and account data. Navigator entries are only created from entries.</translation></message>
+    <message><source>Konto: {account}
+Drive-ID: {drive}
+Token gültig bis: {expires}
+Scopes: {scopes}</source><translation>Account: {account}
+Drive ID: {drive}
+Token valid until: {expires}
+Scopes: {scopes}</translation></message>
+    <message><source>Remote-Clouds</source><translation>Remote Clouds</translation></message>
+    <message><source>Verbindungen</source><translation>Connections</translation></message>
+    <message><source>Einträge</source><translation>Entries</translation></message>
+    <message><source>Dateizuordnungen</source><translation>File associations</translation></message>
+    <message><source>Optionen</source><translation>Options</translation></message>
+    <message><source>Anbieter</source><translation>Provider</translation></message>
+    <message><source>Name</source><translation>Name</translation></message>
+    <message><source>Tenant-ID</source><translation>Tenant ID</translation></message>
+    <message><source>Client-ID</source><translation>Client ID</translation></message>
+    <message><source>Mit OneDrive verbinden</source><translation>Connect with OneDrive</translation></message>
+    <message><source>Verbindung erneuern</source><translation>Reconnect</translation></message>
+    <message><source>Verbindung entfernen</source><translation>Remove connection</translation></message>
+    <message><source>Konto</source><translation>Account</translation></message>
+    <message><source>Tenant</source><translation>Tenant</translation></message>
+    <message><source>Status</source><translation>Status</translation></message>
+    <message><source>Bereich</source><translation>Scope</translation></message>
+    <message><source>Root-Pfad</source><translation>Root path</translation></message>
+    <message><source>Teams laden</source><translation>Load teams</translation></message>
+    <message><source>Team</source><translation>Team</translation></message>
+    <message><source>Icon</source><translation>Icon</translation></message>
+    <message><source>Eintrag hinzufügen</source><translation>Add entry</translation></message>
+    <message><source>Eintrag entfernen</source><translation>Remove entry</translation></message>
+    <message><source>Dateiendungen</source><translation>File extensions</translation></message>
+    <message><source>Anwendung</source><translation>Application</translation></message>
+    <message><source>Argumente</source><translation>Arguments</translation></message>
+    <message><source>Regel hinzufügen</source><translation>Add rule</translation></message>
+    <message><source>Regel entfernen</source><translation>Remove rule</translation></message>
+    <message><source>Lokale Bearbeitung</source><translation>Local editing</translation></message>
+    <message><source>Remote-Anzeige</source><translation>Remote display</translation></message>
+    <message><source>.-Notation als versteckte Dateien/Ordner behandeln</source><translation>Treat dot notation as hidden files/folders</translation></message>
+    <message><source>Lokale Word-/Excel-Dateien ueber persoenliches OneDrive-Web bearbeiten</source><translation>Edit local Word/Excel files via personal OneDrive web</translation></message>
+    <message><source>Persoenliche OneDrive-Verbindung</source><translation>Personal OneDrive connection</translation></message>
+    <message><source>Temporärer Remote-Ordner</source><translation>Temporary remote folder</translation></message>
+    <message><source>Die Verbindung muss nach Berechtigungsänderungen erneut verbunden werden.</source><translation>The connection must be reconnected after permission changes.</translation></message>
+    <message><source>(Keine Scopes im Token gefunden)</source><translation>(No scopes found in token)</translation></message>
+    <message><source>Remote-Dateien koennen anhand ihrer Endung einer Anwendung zugeordnet werden. In den Argumenten wird {url} durch die Remote-URL ersetzt.</source><translation>Remote files can be assigned to an application based on their extension. In the arguments, {url} is replaced with the remote URL.</translation></message>
+    <message><source>Lokale Office-Dateien werden in das persoenliche OneDrive der gewaehlten Verbindung unter /.tablion-temp oder einem eigenen Unterordner hochgeladen und dann ueber ihre Web-URL in der PWA geoeffnet. Team- oder SharePoint-Ziele werden hier bewusst nicht verwendet.</source><translation>Local Office files are uploaded to the selected connection's personal OneDrive under /.tablion-temp or a custom subfolder and then opened in the PWA via their web URL. Team or SharePoint targets are intentionally not used here.</translation></message>
+    <message><source>Wenn aktiv, werden Remote-Einträge wie .git oder .env über den normalen Schalter für versteckte Dateien behandelt: ausgeblendet oder bei eingeblendeten versteckten Dateien abgedunkelt dargestellt.</source><translation>When enabled, remote entries like .git or .env use the normal hidden-files toggle: hidden completely or shown dimmed when hidden files are visible.</translation></message>
+    <message><source>Aktiv</source><translation>Active</translation></message>
+    <message><source>Deaktiviert</source><translation>Disabled</translation></message>
+    <message><source>Verbunden</source><translation>Connected</translation></message>
+    <message><source>Unvollständig</source><translation>Incomplete</translation></message>
+    <message><source>Verbindung</source><translation>Connection</translation></message>
+    <message><source>Root</source><translation>Root</translation></message>
+    <message><source>Persönlich</source><translation>Personal</translation></message>
+    <message><source>SharePoint</source><translation>SharePoint</translation></message>
+    <message><source>Auswählen…</source><translation>Select…</translation></message>
+    <message><source>Keine Teams geladen</source><translation>No teams loaded</translation></message>
+    <message><source>Teams konnten nicht geladen werden</source><translation>Teams could not be loaded</translation></message>
+    <message><source>Bitte zuerst ein Team laden und auswählen.</source><translation>Please load and select a team first.</translation></message>
+    <message><source>Bitte zuerst eine Verbindung auswählen.</source><translation>Please select a connection first.</translation></message>
+    <message><source>Aktuell ist nur OneDrive-Authentifizierung implementiert.</source><translation>Currently only OneDrive authentication is implemented.</translation></message>
+    <message><source>Für OneDrive ist eine Client-ID erforderlich.</source><translation>A client ID is required for OneDrive.</translation></message>
+    <message><source>OneDrive-Anmeldung</source><translation>OneDrive sign-in</translation></message>
+    <message><source>OneDrive-Anmeldung fehlgeschlagen</source><translation>OneDrive sign-in failed</translation></message>
+    <message><source>Bitte öffne die Microsoft-Seite und gib dort den folgenden Code ein:</source><translation>Please open the Microsoft page and enter the following code there:</translation></message>
+    <message><source>Geöffnete URL:</source><translation>Opened URL:</translation></message>
+    <message><source>Fallback-URL:</source><translation>Fallback URL:</translation></message>
   </context>
 
   <context>

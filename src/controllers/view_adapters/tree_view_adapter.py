@@ -13,6 +13,15 @@ class TreeViewAdapter:
         model = self.tree_view.model()
         return model if model is not None else self.file_model
 
+    def _is_remote_model(self, model) -> bool:
+        if model is None or not hasattr(model, "currentLocation"):
+            return False
+        try:
+            location = model.currentLocation()
+        except Exception:
+            return False
+        return bool(location is not None and getattr(location, "is_remote", False))
+
     def selected_paths(self):
         selection_model = self.tree_view.selectionModel()
         if selection_model is None:
@@ -92,13 +101,14 @@ class TreeViewAdapter:
             if not hasattr(model, "filePath") or not hasattr(model, "isDir"):
                 return QDir.cleanPath(current_directory)
             target_path = QDir.cleanPath(model.filePath(index))
-            if model.isDir(index) and Path(target_path).exists():
+            target_exists = self._is_remote_model(model) or Path(target_path).exists()
+            if model.isDir(index) and target_exists:
                 return target_path
 
             parent_index = index.parent()
             if parent_index.isValid():
                 parent_path = QDir.cleanPath(model.filePath(parent_index))
-                if Path(parent_path).exists():
+                if self._is_remote_model(model) or Path(parent_path).exists():
                     return parent_path
 
         return QDir.cleanPath(current_directory)

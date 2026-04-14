@@ -221,6 +221,10 @@
     <message><source>Tablion wurde auf Werkseinstellung zurückgesetzt.</source><translation>Tablion wurde auf Werkseinstellung zurückgesetzt.</translation></message>
     <message><source>Zurücksetzen auf Werkseinstellung ist fehlgeschlagen.</source><translation>Zurücksetzen auf Werkseinstellung ist fehlgeschlagen.</translation></message>
     <message><source>Hinweis: Im temporären Verzeichnis wird dauerhaft gelöscht.</source><translation>Hinweis: Im temporären Verzeichnis wird dauerhaft gelöscht.</translation></message>
+    <message><source>Datei</source><translation>Datei</translation></message>
+    <message><source>Office-Web-Änderungen übernehmen</source><translation>Office-Web-Änderungen übernehmen</translation></message>
+    <message><source>Office-Web-Änderungen wurden lokal übernommen.</source><translation>Office-Web-Änderungen wurden lokal übernommen.</translation></message>
+    <message><source>Die geänderte Datei konnte nicht lokal aktualisiert werden.</source><translation>Die geänderte Datei konnte nicht lokal aktualisiert werden.</translation></message>
   </context>
 
   <context>
@@ -303,6 +307,13 @@
     <message><source>Archiv entpackt: {name}</source><translation>Archiv entpackt: {name}</translation></message>
     <message><source>Archiv entpackt: {count} Elemente</source><translation>Archiv entpackt: {count} Elemente</translation></message>
     <message><source>Zielordner zum Entpacken wählen</source><translation>Zielordner zum Entpacken wählen</translation></message>
+    <message><source>Suchen</source><translation>Suchen</translation></message>
+    <message><source>Suche schließen</source><translation>Suche schließen</translation></message>
+    <message><source>Dateien und Ordner rekursiv suchen</source><translation>Dateien und Ordner rekursiv suchen</translation></message>
+    <message><source>Im Browser öffnen</source><translation>Im Browser öffnen</translation></message>
+    <message><source>Lokal öffnen</source><translation>Lokal öffnen</translation></message>
+    <message><source>Lokal öffnen mit...</source><translation>Lokal öffnen mit...</translation></message>
+    <message><source>Office-Web-Bearbeitung fehlgeschlagen</source><translation>Office-Web-Bearbeitung fehlgeschlagen</translation></message>
   </context>
 
   <context>
@@ -423,6 +434,8 @@
     <message><source>Ausblenden</source><translation>Ausblenden</translation></message>
     <message><source>Einblenden</source><translation>Einblenden</translation></message>
     <message><source>Alle einblenden</source><translation>Alle einblenden</translation></message>
+    <message><source>Alle ausblenden</source><translation>Alle ausblenden</translation></message>
+    <message><source>Bearbeiten</source><translation>Bearbeiten</translation></message>
     <message><source>Favorit umbenennen</source><translation>Favorit umbenennen</translation></message>
     <message><source>Name:</source><translation>Name:</translation></message>
   </context>
@@ -450,6 +463,72 @@
     <message><source>Abbrechen</source><translation>Abbrechen</translation></message>
     <message><source>Anwenden</source><translation>Anwenden</translation></message>
     <message><source>OK</source><translation>OK</translation></message>
+    <message><source>Verbindungen enthalten Authentifizierung und Kontodaten. Einträge im Navigator werden erst aus Einträgen erzeugt.</source><translation>Verbindungen enthalten Authentifizierung und Kontodaten. Einträge im Navigator werden erst aus Einträgen erzeugt.</translation></message>
+    <message><source>Konto: {account}
+Drive-ID: {drive}
+Token gültig bis: {expires}
+Scopes: {scopes}</source><translation>Konto: {account}
+Drive-ID: {drive}
+Token gültig bis: {expires}
+Scopes: {scopes}</translation></message>
+    <message><source>Remote-Clouds</source><translation>Remote-Clouds</translation></message>
+    <message><source>Verbindungen</source><translation>Verbindungen</translation></message>
+    <message><source>Einträge</source><translation>Einträge</translation></message>
+    <message><source>Dateizuordnungen</source><translation>Dateizuordnungen</translation></message>
+    <message><source>Optionen</source><translation>Optionen</translation></message>
+    <message><source>Anbieter</source><translation>Anbieter</translation></message>
+    <message><source>Name</source><translation>Name</translation></message>
+    <message><source>Tenant-ID</source><translation>Tenant-ID</translation></message>
+    <message><source>Client-ID</source><translation>Client-ID</translation></message>
+    <message><source>Mit OneDrive verbinden</source><translation>Mit OneDrive verbinden</translation></message>
+    <message><source>Verbindung erneuern</source><translation>Verbindung erneuern</translation></message>
+    <message><source>Verbindung entfernen</source><translation>Verbindung entfernen</translation></message>
+    <message><source>Konto</source><translation>Konto</translation></message>
+    <message><source>Tenant</source><translation>Tenant</translation></message>
+    <message><source>Status</source><translation>Status</translation></message>
+    <message><source>Bereich</source><translation>Bereich</translation></message>
+    <message><source>Root-Pfad</source><translation>Root-Pfad</translation></message>
+    <message><source>Teams laden</source><translation>Teams laden</translation></message>
+    <message><source>Team</source><translation>Team</translation></message>
+    <message><source>Icon</source><translation>Icon</translation></message>
+    <message><source>Eintrag hinzufügen</source><translation>Eintrag hinzufügen</translation></message>
+    <message><source>Eintrag entfernen</source><translation>Eintrag entfernen</translation></message>
+    <message><source>Dateiendungen</source><translation>Dateiendungen</translation></message>
+    <message><source>Anwendung</source><translation>Anwendung</translation></message>
+    <message><source>Argumente</source><translation>Argumente</translation></message>
+    <message><source>Regel hinzufügen</source><translation>Regel hinzufügen</translation></message>
+    <message><source>Regel entfernen</source><translation>Regel entfernen</translation></message>
+    <message><source>Lokale Bearbeitung</source><translation>Lokale Bearbeitung</translation></message>
+    <message><source>Remote-Anzeige</source><translation>Remote-Anzeige</translation></message>
+    <message><source>.-Notation als versteckte Dateien/Ordner behandeln</source><translation>.-Notation als versteckte Dateien/Ordner behandeln</translation></message>
+    <message><source>Lokale Word-/Excel-Dateien ueber persoenliches OneDrive-Web bearbeiten</source><translation>Lokale Word-/Excel-Dateien ueber persoenliches OneDrive-Web bearbeiten</translation></message>
+    <message><source>Persoenliche OneDrive-Verbindung</source><translation>Persoenliche OneDrive-Verbindung</translation></message>
+    <message><source>Temporärer Remote-Ordner</source><translation>Temporärer Remote-Ordner</translation></message>
+    <message><source>Die Verbindung muss nach Berechtigungsänderungen erneut verbunden werden.</source><translation>Die Verbindung muss nach Berechtigungsänderungen erneut verbunden werden.</translation></message>
+    <message><source>(Keine Scopes im Token gefunden)</source><translation>(Keine Scopes im Token gefunden)</translation></message>
+    <message><source>Remote-Dateien koennen anhand ihrer Endung einer Anwendung zugeordnet werden. In den Argumenten wird {url} durch die Remote-URL ersetzt.</source><translation>Remote-Dateien koennen anhand ihrer Endung einer Anwendung zugeordnet werden. In den Argumenten wird {url} durch die Remote-URL ersetzt.</translation></message>
+    <message><source>Lokale Office-Dateien werden in das persoenliche OneDrive der gewaehlten Verbindung unter /.tablion-temp oder einem eigenen Unterordner hochgeladen und dann ueber ihre Web-URL in der PWA geoeffnet. Team- oder SharePoint-Ziele werden hier bewusst nicht verwendet.</source><translation>Lokale Office-Dateien werden in das persoenliche OneDrive der gewaehlten Verbindung unter /.tablion-temp oder einem eigenen Unterordner hochgeladen und dann ueber ihre Web-URL in der PWA geoeffnet. Team- oder SharePoint-Ziele werden hier bewusst nicht verwendet.</translation></message>
+    <message><source>Wenn aktiv, werden Remote-Einträge wie .git oder .env über den normalen Schalter für versteckte Dateien behandelt: ausgeblendet oder bei eingeblendeten versteckten Dateien abgedunkelt dargestellt.</source><translation>Wenn aktiv, werden Remote-Einträge wie .git oder .env über den normalen Schalter für versteckte Dateien behandelt: ausgeblendet oder bei eingeblendeten versteckten Dateien abgedunkelt dargestellt.</translation></message>
+    <message><source>Aktiv</source><translation>Aktiv</translation></message>
+    <message><source>Deaktiviert</source><translation>Deaktiviert</translation></message>
+    <message><source>Verbunden</source><translation>Verbunden</translation></message>
+    <message><source>Unvollständig</source><translation>Unvollständig</translation></message>
+    <message><source>Verbindung</source><translation>Verbindung</translation></message>
+    <message><source>Root</source><translation>Root</translation></message>
+    <message><source>Persönlich</source><translation>Persönlich</translation></message>
+    <message><source>SharePoint</source><translation>SharePoint</translation></message>
+    <message><source>Auswählen…</source><translation>Auswählen…</translation></message>
+    <message><source>Keine Teams geladen</source><translation>Keine Teams geladen</translation></message>
+    <message><source>Teams konnten nicht geladen werden</source><translation>Teams konnten nicht geladen werden</translation></message>
+    <message><source>Bitte zuerst ein Team laden und auswählen.</source><translation>Bitte zuerst ein Team laden und auswählen.</translation></message>
+    <message><source>Bitte zuerst eine Verbindung auswählen.</source><translation>Bitte zuerst eine Verbindung auswählen.</translation></message>
+    <message><source>Aktuell ist nur OneDrive-Authentifizierung implementiert.</source><translation>Aktuell ist nur OneDrive-Authentifizierung implementiert.</translation></message>
+    <message><source>Für OneDrive ist eine Client-ID erforderlich.</source><translation>Für OneDrive ist eine Client-ID erforderlich.</translation></message>
+    <message><source>OneDrive-Anmeldung</source><translation>OneDrive-Anmeldung</translation></message>
+    <message><source>OneDrive-Anmeldung fehlgeschlagen</source><translation>OneDrive-Anmeldung fehlgeschlagen</translation></message>
+    <message><source>Bitte öffne die Microsoft-Seite und gib dort den folgenden Code ein:</source><translation>Bitte öffne die Microsoft-Seite und gib dort den folgenden Code ein:</translation></message>
+    <message><source>Geöffnete URL:</source><translation>Geöffnete URL:</translation></message>
+    <message><source>Fallback-URL:</source><translation>Fallback-URL:</translation></message>
   </context>
 
   <context>

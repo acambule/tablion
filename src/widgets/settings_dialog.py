@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -100,6 +101,7 @@ class SettingsDialog(QDialog):
         self._button_box = self.ui.findChild(QDialogButtonBox, "buttonBox")
         self._categories_list = self.ui.findChild(QListWidget, "categoriesList")
         self._category_stack = self.ui.findChild(QStackedWidget, "categoryStack")
+        self._splitter = self.ui.findChild(QSplitter, "splitter")
         self._export_session_button = self.ui.findChild(QPushButton, "exportSessionButton")
         self._import_session_button = self.ui.findChild(QPushButton, "importSessionButton")
         self._reset_workspace_button = self.ui.findChild(QPushButton, "resetWorkspaceButton")
@@ -144,6 +146,7 @@ class SettingsDialog(QDialog):
         self._rebuild_mount_connection_combo()
         self._rebuild_remote_open_rules_table()
         self._rebuild_local_office_web_connection_combo()
+        self._configure_splitter()
 
         if self._categories_list and self._category_stack:
             self._categories_list.setCurrentRow(0)
@@ -214,6 +217,28 @@ class SettingsDialog(QDialog):
             self._import_session_button.clicked.connect(self.sessionImportRequested.emit)
         if self._reset_workspace_button:
             self._reset_workspace_button.clicked.connect(self.factoryResetRequested.emit)
+
+    def _configure_splitter(self) -> None:
+        if self._splitter is None:
+            return
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setCollapsible(0, False)
+        self._splitter.setCollapsible(1, False)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setHandleWidth(max(8, self._splitter.handleWidth()))
+
+        navigation_panel = self.ui.findChild(QWidget, "navigationPanel")
+        content_panel = self.ui.findChild(QWidget, "contentPanel")
+        if navigation_panel is not None:
+            navigation_panel.setMinimumWidth(220)
+        if content_panel is not None:
+            content_panel.setMinimumWidth(420)
+
+        total_width = max(self.width(), self.minimumWidth(), 920)
+        left_width = max(220, min(280, total_width // 4))
+        right_width = max(420, total_width - left_width)
+        self._splitter.setSizes([left_width, right_width])
 
     def _setup_remote_clouds_page(self) -> None:
         if self._categories_list is None or self._category_stack is None:

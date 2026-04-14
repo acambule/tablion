@@ -4,6 +4,15 @@ from PySide6.QtCore import QDir, QModelIndex, Qt
 
 
 class DropUiService:
+    def _is_remote_model(self, model) -> bool:
+        if model is None or not hasattr(model, "currentLocation"):
+            return False
+        try:
+            location = model.currentLocation()
+        except Exception:
+            return False
+        return bool(location is not None and getattr(location, "is_remote", False))
+
     def compute_highlight(self, *, target_view, pos, file_model):
         if target_view is None:
             return QModelIndex(), False
@@ -14,7 +23,8 @@ class DropUiService:
 
         if index.isValid():
             target_path = QDir.cleanPath(file_model.filePath(index))
-            if file_model.isDir(index) and QDir(target_path).exists():
+            target_exists = self._is_remote_model(file_model) or QDir(target_path).exists()
+            if file_model.isDir(index) and target_exists:
                 highlight_index = index
             else:
                 parent_index = index.parent()

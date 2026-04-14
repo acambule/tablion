@@ -720,6 +720,8 @@ class NavigatorManager(QObject):
                 group_item.setText(0, app_tr('NavigatorManager', raw_group))
             for child_idx in range(group_item.childCount()):
                 child = group_item.child(child_idx)
+                if child.data(0, ROLE_KIND) != 'entry':
+                    continue
                 source = str(child.data(0, ROLE_ENTRY_SOURCE) or 'system').strip()
                 raw_label = child.data(0, ROLE_ENTRY_KEY)
                 if source == 'system' and isinstance(raw_label, str) and raw_label:

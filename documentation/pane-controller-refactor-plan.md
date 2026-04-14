@@ -219,18 +219,28 @@ Stand nach aktuellem Ausbau:
 - `rename`, `delete`, `mkdir` sind für Remote implementiert
 - `new file` ist für Remote implementiert
 - `copy local -> remote` funktioniert über `Einfügen` und Drag'n'Drop
+- `move local -> remote` funktioniert über `Einfügen` und Drag'n'Drop
 - `copy remote -> local` funktioniert über `Einfügen` und Drag'n'Drop
 - `move remote -> local` funktioniert über `Einfügen` und Drag'n'Drop
 - `copy remote -> remote` innerhalb desselben Remote-Eintrags ist implementiert
 - `move remote -> remote` innerhalb desselben Remote-Eintrags ist implementiert
 - internes `remote -> remote` Drag'n'Drop innerhalb desselben Remote-Eintrags ist implementiert
+- `remote -> remote` Drag'n'Drop als `copy` und `move` funktioniert
+- `remote -> local` Drag'n'Drop funktioniert
+- Konfliktbehandlung für Remote-Transfers ist vorhanden
+- Progress-Dialoge für Remote-Transfers sind vorhanden
 - `duplicate` ist für Remote implementiert
 - `copy`, `cut`, `paste`, `rename`, `delete`, `new folder`, `new file`, `duplicate` sind im Remote-Kontextmenü vorhanden
+- lokale Office-Dateien können optional in das persönliche OneDrive-Temp-Verzeichnis hochgeladen und per PWA geöffnet werden
+- dabei werden Office-Web-Sessions gemerkt, beim Fokusgewinn auf Remote-Änderungen geprüft und geänderte Dateien auf Nachfrage wieder lokal an den Ursprungsort zurückgeholt
+- wiederholtes Öffnen derselben lokalen Office-Datei verwendet dieselbe Remote-Temp-Datei weiter statt Duplikate anzulegen
+- veraltete Office-Web-Sessions werden später bereinigt
 
 Noch offen in Phase 7:
-- `remote -> anderer remote mount`
-- `local cut -> remote` als echtes Verschieben
-- robustere Konfliktstrategien und bessere Fortschrittsanzeige für Remote-Transfers
+- explizites Beenden einer Office-Web-Bearbeitung mit gezieltem Abschluss und Löschen der zugehörigen Remote-Temp-Datei
+- Übersicht und manuelle Verwaltung laufender Office-Web-Sessions
+- `remote -> anderer remote mount` gezielt weiter validieren und fachlich absichern
+- Abbruch-/Cancel-Verhalten und feinere Fehlerbehandlung bei längeren Remote-Transfers
 - SharePoint-/Team-Auswahl fachlich weiter ausbauen
 
 ## Regeln für die Umsetzung

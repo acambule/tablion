@@ -1314,7 +1314,6 @@ class MainWindow(QMainWindow):
             self._settings_dialog.destroyed.connect(lambda _=None: setattr(self, "_settings_dialog", None))
 
             self._settings_dialog.setWindowModality(Qt.WindowModality.NonModal)
-            self._settings_dialog.adjustSize()
             self._settings_dialog.show()
             if remote_mount_id:
                 self._settings_dialog.focus_remote_mount(remote_mount_id)

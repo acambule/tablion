@@ -4,6 +4,7 @@ import os
 import shlex
 import shutil
 import subprocess
+from configparser import ConfigParser
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -72,6 +73,111 @@ def _desktop_application_dirs() -> list[Path]:
         seen.add(resolved)
         unique_dirs.append(resolved)
     return unique_dirs
+
+
+def _desktop_names() -> list[str]:
+    raw = str(os.environ.get("XDG_CURRENT_DESKTOP") or "").strip()
+    if not raw:
+        return []
+    names: list[str] = []
+    for part in raw.replace(";", ":").split(":"):
+        value = part.strip().lower()
+        if value and value not in names:
+            names.append(value)
+    return names
+
+
+def _mimeapps_search_paths() -> list[Path]:
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local/share"))
+
+    config_dirs = [config_home]
+    data_dirs = [data_home]
+
+    data_dirs_env = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    for value in data_dirs_env.split(":"):
+        candidate = Path(value).expanduser()
+        if str(candidate):
+            data_dirs.append(candidate)
+
+    config_dirs_env = os.environ.get("XDG_CONFIG_DIRS") or "/etc/xdg"
+    for value in config_dirs_env.split(":"):
+        candidate = Path(value).expanduser()
+        if str(candidate):
+            config_dirs.append(candidate)
+
+    desktop_names = _desktop_names()
+    candidates: list[Path] = []
+
+    for base in config_dirs:
+        for desktop_name in desktop_names:
+            candidates.append(base / f"{desktop_name}-mimeapps.list")
+        candidates.append(base / "mimeapps.list")
+
+    for base in data_dirs:
+        app_dir = base / "applications"
+        for desktop_name in desktop_names:
+            candidates.append(app_dir / f"{desktop_name}-mimeapps.list")
+        candidates.append(app_dir / "mimeapps.list")
+
+    unique_paths: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.expanduser()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_paths.append(resolved)
+    return unique_paths
+
+
+def _parse_desktop_id_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for part in value.split(";"):
+        desktop_id = part.strip()
+        if not desktop_id or desktop_id in seen:
+            continue
+        seen.add(desktop_id)
+        result.append(desktop_id)
+    return result
+
+
+@lru_cache(maxsize=1)
+def _mimeapps_preferences() -> dict[str, dict[str, list[str]]]:
+    defaults: dict[str, list[str]] = {}
+    added: dict[str, list[str]] = {}
+    removed: dict[str, list[str]] = {}
+
+    for mimeapps_path in reversed(_mimeapps_search_paths()):
+        if not mimeapps_path.exists():
+            continue
+        parser = ConfigParser(interpolation=None, strict=False)
+        parser.optionxform = str
+        try:
+            parser.read(mimeapps_path, encoding="utf-8")
+        except Exception:
+            continue
+
+        for section_name, target in (
+            ("Default Applications", defaults),
+            ("Added Associations", added),
+            ("Removed Associations", removed),
+        ):
+            if not parser.has_section(section_name):
+                continue
+            for mime_type, raw_value in parser.items(section_name):
+                desktop_ids = _parse_desktop_id_list(raw_value)
+                if desktop_ids:
+                    target[mime_type] = desktop_ids
+
+    return {
+        "defaults": defaults,
+        "added": added,
+        "removed": removed,
+    }
 
 
 def _parse_bool(value: str | None) -> bool:
@@ -212,16 +318,57 @@ def set_default_application_for_mime(desktop_id: str, mime_type: str) -> bool:
 
 def applications_for_path(path: str | Path) -> list[DesktopApplication]:
     mime_types = _mime_types_for_path(path)
+    all_applications = _desktop_applications()
+    preferences = _mimeapps_preferences()
+
     matching_applications = [
-        app for app in _desktop_applications().values()
+        app for app in all_applications.values()
         if any(mime_type in app.mime_types for mime_type in mime_types)
     ]
+    matching_ids = {app.desktop_id for app in matching_applications}
+
+    removed_ids: set[str] = set()
+    preferred_ids: list[str] = []
+    seen_preferred: set[str] = set()
     default_desktop_id = None
+
     for mime_type in mime_types:
-        default_desktop_id = _default_desktop_id_for_mime(mime_type)
-        if default_desktop_id:
-            break
-    applications: dict[str, DesktopApplication] = {app.desktop_id: app for app in matching_applications}
+        for desktop_id in preferences["removed"].get(mime_type, []):
+            removed_ids.add(desktop_id)
+
+        preferred_for_mime = preferences["defaults"].get(mime_type, [])
+        if preferred_for_mime and default_desktop_id is None:
+            default_desktop_id = preferred_for_mime[0]
+        for desktop_id in preferred_for_mime:
+            if desktop_id not in seen_preferred:
+                seen_preferred.add(desktop_id)
+                preferred_ids.append(desktop_id)
+
+        for desktop_id in preferences["added"].get(mime_type, []):
+            if desktop_id not in seen_preferred:
+                seen_preferred.add(desktop_id)
+                preferred_ids.append(desktop_id)
+
+    if default_desktop_id is None:
+        for mime_type in mime_types:
+            default_desktop_id = _default_desktop_id_for_mime(mime_type)
+            if default_desktop_id:
+                break
+        if default_desktop_id and default_desktop_id not in seen_preferred:
+            preferred_ids.insert(0, default_desktop_id)
+
+    applications: dict[str, DesktopApplication] = {}
+    for desktop_id in preferred_ids:
+        application = all_applications.get(desktop_id)
+        if application is None or desktop_id in removed_ids:
+            continue
+        applications.setdefault(desktop_id, application)
+
+    for application in matching_applications:
+        if application.desktop_id in removed_ids:
+            continue
+        applications.setdefault(application.desktop_id, application)
+
     all_applications = _desktop_applications()
     if default_desktop_id and default_desktop_id in all_applications:
         applications.setdefault(default_desktop_id, all_applications[default_desktop_id])
@@ -229,6 +376,7 @@ def applications_for_path(path: str | Path) -> list[DesktopApplication]:
     sorted_applications.sort(
         key=lambda app: (
             0 if default_desktop_id and app.desktop_id == default_desktop_id else 1,
+            preferred_ids.index(app.desktop_id) if app.desktop_id in preferred_ids else len(preferred_ids),
             app.display_name.casefold(),
         )
     )
@@ -238,7 +386,13 @@ def applications_for_path(path: str | Path) -> list[DesktopApplication]:
 def default_application_for_path(path: str | Path) -> DesktopApplication | None:
     mime_types = _mime_types_for_path(path)
     applications = _desktop_applications()
+    preferences = _mimeapps_preferences()
     for mime_type in mime_types:
+        preferred = preferences["defaults"].get(mime_type, [])
+        if preferred:
+            desktop_id = preferred[0]
+            if desktop_id in applications:
+                return applications[desktop_id]
         desktop_id = _default_desktop_id_for_mime(mime_type)
         if desktop_id and desktop_id in applications:
             return applications[desktop_id]

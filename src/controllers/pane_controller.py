@@ -3343,10 +3343,11 @@ class PaneController(QObject):
             drop_action = Qt.DropAction.MoveAction
 
         target_view = self.active_item_view()
+        active_model = self._active_file_model()
         highlight_index, highlight_root = self._drop_ui_service.compute_highlight(
             target_view=target_view,
             pos=pos,
-            file_model=self.model,
+            file_model=active_model,
         )
 
         self._drop_target_index = highlight_index if highlight_index.isValid() else QModelIndex()
@@ -3499,6 +3500,8 @@ class PaneController(QObject):
 
             action_open_browser = None
             action_open_local = None
+            action_open_local_with = None
+            remote_open_with_actions = {}
             active_model = source_view.model() if source_view is not None else None
             if (
                 active_model is not None
@@ -3514,8 +3517,15 @@ class PaneController(QObject):
                 )
                 action_open_local = menu.addAction(
                     self._tab_menu_icon("document-save", QStyle.StandardPixmap.SP_DialogSaveButton),
-                    app_tr("PaneController", "Lokal herunterladen und öffnen"),
+                    app_tr("PaneController", "Lokal öffnen"),
                 )
+                remote_path_hint = str(active_model.filePath(current_index) or "").strip()
+                remote_applications = applications_for_path(remote_path_hint) if remote_path_hint else []
+                if remote_applications:
+                    action_open_local_with = menu.addMenu(app_tr("PaneController", "Lokal öffnen mit..."))
+                    for application in remote_applications:
+                        action = action_open_local_with.addAction(application.icon(), application.display_name)
+                        remote_open_with_actions[action] = application
 
             menu.addSeparator()
 
@@ -3562,6 +3572,17 @@ class PaneController(QObject):
                 cached_path = self._download_remote_file_for_open(remote_location)
                 if cached_path:
                     self._open_service.open_default(cached_path)
+            elif chosen in remote_open_with_actions and active_model is not None:
+                remote_location = PaneLocation(kind="remote", path=str(active_model.filePath(current_index) or ""), remote_id=self.current_location.remote_id)
+                cached_path = self._download_remote_file_for_open(remote_location)
+                if cached_path:
+                    application = remote_open_with_actions[chosen]
+                    if not self._open_service.open_with_application(application, cached_path):
+                        QMessageBox.warning(
+                            self.widget,
+                            app_tr("PaneController", "Öffnen mit fehlgeschlagen"),
+                            app_tr("PaneController", "Die Anwendung konnte nicht gestartet werden."),
+                        )
             elif chosen == action_delete:
                 self.delete_selected_paths(permanent=None)
             elif chosen == action_rename:
@@ -3996,11 +4017,11 @@ class PaneController(QObject):
             for view in (self.tree_view, self.icon_view):
                 if view is None:
                     continue
-                view.setDragEnabled(False)
-                view.setAcceptDrops(False)
-                view.viewport().setAcceptDrops(False)
-                view.setDropIndicatorShown(False)
-                view.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
+                view.setDragEnabled(True)
+                view.setAcceptDrops(True)
+                view.viewport().setAcceptDrops(True)
+                view.setDropIndicatorShown(True)
+                view.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
             if self.tree_view is not None:
                 self.tree_view.setRootIndex(QModelIndex())
             if self.icon_view is not None:
