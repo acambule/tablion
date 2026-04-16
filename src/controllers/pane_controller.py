@@ -1,8 +1,10 @@
 import os
 import shlex
-from pathlib import Path
+import json
+import hashlib
+from pathlib import Path, PurePosixPath
 
-from PySide6.QtCore import QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex, QProcess, QThread
+from PySide6.QtCore import QDateTime, QDir, QEvent, QObject, QRect, QSize, Qt, QTimer, Signal, QPoint, QMimeData, QUrl, QModelIndex, QProcess, QThread, QItemSelectionModel
 from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QDesktopServices, QIcon, QDrag, QKeySequence, QPen
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import QApplication, QAbstractItemDelegate, QAbstractItemView, QFileDialog, QHBoxLayout, QInputDialog, QLineEdit, QListView, QMenu, QMessageBox, QProgressDialog, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QToolButton, QToolTip, QTreeView, QTreeWidget, QTreeWidgetItem, QWidget, QRubberBand
@@ -15,12 +17,13 @@ except ImportError:
     QDBusPendingCallWatcher = None
 
 from localization import app_tr, ask_yes_no
-from debug_log import debug_log
+from debug_log import debug_log, debug_mime_data
 from backends.local import LocalFileSystemBackend
 from controllers.remote_drive_controller import RemoteDriveController
 from controllers.view_adapters import IconViewAdapter, TreeViewAdapter
 from domain.filesystem import PaneLocation
 from models.file_operations import FileOperations
+from models.remote_external_drag_model import RemoteExternalDragModel
 from models.remote_file_tree_model import RemoteFileItem, RemoteFileTreeModel
 from services.file_actions import (
     ArkDropService,
@@ -139,6 +142,8 @@ class DropTargetHighlightDelegate(QStyledItemDelegate):
 
 
 class PaneController(QObject):
+    _REMOTE_EXPORT_STAGING_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
     currentPathChanged = Signal(str)
     navigationStateChanged = Signal(bool, bool)
     groupRequested = Signal()
@@ -256,6 +261,14 @@ class PaneController(QObject):
         self.model = file_system_model
         self._remote_drive_controller = remote_drive_controller
         self._remote_model = RemoteFileTreeModel(self)
+        self._remote_external_drag_model = RemoteExternalDragModel(
+            remote_clipboard_mime_type=self._REMOTE_CLIPBOARD_MIME_TYPE,
+            clipboard_operation_mime_type=self._CLIPBOARD_OPERATION_MIME_TYPE,
+            parent=self,
+        )
+        self._remote_external_drag_model.setRootPath(QDir.rootPath())
+        self._remote_external_drag_model.setReadOnly(False)
+        self._remote_external_drag_model.setFilter(QDir.Filter.AllEntries | QDir.NoDotAndDotDot)
         self.file_operations = FileOperations()
         self._local_backend = LocalFileSystemBackend()
         self._open_service = OpenService()
@@ -289,6 +302,7 @@ class PaneController(QObject):
             self._drag_mime_codec,
             self._drag_visual_service,
             self._remote_drag_guard,
+            build_external_remote_mime_data=self._build_external_remote_drag_mime_data,
         )
         self._drop_target_service = DropTargetService(self._drop_service)
         self._drop_execution_service = DropExecutionService(self._drop_service)
@@ -1399,21 +1413,20 @@ class PaneController(QObject):
                     self.current_location is not None
                     and self.current_location.is_remote
                     and index.isValid()
-                    and is_selected_index
                     and not has_multi_select_modifier
                 ):
-                    drag_locations = self._selected_remote_locations_from_view(watched_view)
+                    model = watched_view.model() if hasattr(watched_view, "model") else None
+                    if is_selected_index:
+                        drag_locations = self._selected_remote_locations_from_view(watched_view)
+                    else:
+                        clicked_location = self._remote_location_from_index(index, model)
+                        drag_locations = [clicked_location] if clicked_location is not None else []
                     self._drag_session_service.arm_remote_drag(
                         source_view=watched_view,
                         start_pos=event.position().toPoint(),
                         locations=drag_locations,
                     )
-                    debug_log(
-                        "Remote drag snapshot captured: "
-                        f"count={len(drag_locations)} "
-                        f"paths={[location.path for location in drag_locations[:5]]}"
-                    )
-                    return True
+                    return False
                 self._drag_session_service.clear_remote_drag()
                 if (not index.isValid() or not is_selected_index) and not has_multi_select_modifier:
                     watched_view.clearSelection()
@@ -1501,7 +1514,6 @@ class PaneController(QObject):
                     event.source(),
                     source_view=watched_view,
                 )
-                self._log_drop_event_state("drag-enter", event, source_paths, target_dir, watched_view)
                 drop_action = self.resolve_drop_action(
                     event,
                     source_paths,
@@ -1516,12 +1528,10 @@ class PaneController(QObject):
                     source_paths=source_paths,
                     target_dir=target_dir,
                 ):
-                    debug_log("DND event: drag-enter accepted")
                     event.setDropAction(drop_action)
                     self.update_drop_target_visual(event.position().toPoint(), drop_action)
                     event.accept()
                     return True
-                debug_log("DND event: drag-enter rejected")
 
             if event.type() == QEvent.Type.DragMove:
                 source_paths, target_dir = self.resolve_drop_context(
@@ -1530,7 +1540,6 @@ class PaneController(QObject):
                     event.source(),
                     source_view=watched_view,
                 )
-                self._log_drop_event_state("drag-move", event, source_paths, target_dir, watched_view)
                 drop_action = self.resolve_drop_action(
                     event,
                     source_paths,
@@ -1545,12 +1554,10 @@ class PaneController(QObject):
                     source_paths=source_paths,
                     target_dir=target_dir,
                 ):
-                    debug_log("DND event: drag-move accepted")
                     event.setDropAction(drop_action)
                     self.update_drop_target_visual(event.position().toPoint(), drop_action)
                     event.accept()
                     return True
-                debug_log("DND event: drag-move rejected")
                 self.clear_drop_target_visual()
 
             if event.type() == QEvent.Type.DragLeave:
@@ -1568,7 +1575,6 @@ class PaneController(QObject):
                     event.source(),
                     source_view=watched_view,
                 )
-                self._log_drop_event_state("drop", event, source_paths, target_dir, watched_view)
                 drop_action = self.resolve_drop_action(
                     event,
                     source_paths,
@@ -1585,7 +1591,6 @@ class PaneController(QObject):
                     source_paths=source_paths,
                     target_dir=target_dir,
                 ):
-                    debug_log("DND event: drop handled")
                     self.clear_drop_target_visual()
                     if self._selection_rubber_band is not None:
                         self._selection_rubber_band.hide()
@@ -1593,7 +1598,6 @@ class PaneController(QObject):
                     self._selection_rubber_viewport = None
                     event.accept()
                     return True
-                debug_log("DND event: drop rejected")
                 self.clear_drop_target_visual()
 
         return super().eventFilter(watched, event)
@@ -1820,6 +1824,19 @@ class PaneController(QObject):
             )
         return locations
 
+    def _remote_location_from_index(self, index: QModelIndex, model=None) -> PaneLocation | None:
+        if self.current_location is None or not self.current_location.is_remote or not index.isValid():
+            return None
+        active_model = model
+        if active_model is None and hasattr(self, "current_view") and self.current_view is not None:
+            active_model = self.current_view.model()
+        if active_model is None or not hasattr(active_model, "filePath"):
+            return None
+        clean_path = QDir.cleanPath(str(active_model.filePath(index) or ""))
+        if not clean_path or clean_path == "/":
+            return None
+        return PaneLocation(kind="remote", path=clean_path, remote_id=self.current_location.remote_id)
+
     def _selected_remote_locations_from_view(self, view) -> list[PaneLocation]:
         if self.current_location is None or not self.current_location.is_remote or view is None:
             return []
@@ -1850,6 +1867,226 @@ class PaneController(QObject):
 
     def _build_remote_clipboard_mime_data(self, locations: list[PaneLocation], *, operation: str) -> QMimeData:
         return self._drag_mime_codec.build_remote_mime_data(locations, operation=operation)
+
+    def _remote_export_staging_root(self) -> Path:
+        staging_root = Path.home() / "Downloads" / ".tablion-dnd"
+        staging_root.mkdir(parents=True, exist_ok=True)
+        return staging_root
+
+    def _remote_export_staging_name(self, location: PaneLocation) -> str:
+        source_name = PurePosixPath(str(location.path or "/")).name.strip() or "Element"
+        suffixes = PurePosixPath(source_name).suffixes
+        suffix = "".join(suffixes)
+        stem = source_name[: -len(suffix)] if suffix else source_name
+        stem = stem or source_name
+        digest = hashlib.sha1(
+            f"{location.remote_id or ''}|{location.path or ''}".encode("utf-8")
+        ).hexdigest()[:12]
+        return f"{stem}.{digest}{suffix}" if suffix else f"{stem}.{digest}"
+
+    def _cleanup_remote_export_staging(self, staging_root: Path, *, keep_paths: set[Path] | None = None) -> None:
+        keep_paths = {path.resolve() for path in (keep_paths or set())}
+        now = QDateTime.currentSecsSinceEpoch()
+        for candidate in staging_root.iterdir():
+            try:
+                resolved_candidate = candidate.resolve()
+            except OSError:
+                resolved_candidate = candidate
+            if resolved_candidate in keep_paths:
+                continue
+            try:
+                age_seconds = now - int(candidate.stat().st_mtime)
+            except OSError:
+                continue
+            if age_seconds < self._REMOTE_EXPORT_STAGING_MAX_AGE_SECONDS:
+                continue
+            try:
+                self._remote_drive_controller._remove_local_path(candidate)
+                debug_log(f"Remote export staging cleanup removed: {candidate}")
+            except Exception as error:
+                debug_log(f"Remote export staging cleanup failed for {candidate}: {error}")
+
+    def _stage_remote_location_for_external_drag(self, location: PaneLocation, staging_root: Path) -> Path:
+        if self._remote_drive_controller is None:
+            raise RuntimeError("Remote drive controller is unavailable")
+        stable_name = self._remote_export_staging_name(location)
+        local_path = self._remote_drive_controller.transfer_item_to_local(
+            location,
+            staging_root,
+            target_name=stable_name,
+            overwrite=True,
+        )
+        return Path(local_path)
+
+    def _build_external_remote_drag_mime_data(self, locations: list[PaneLocation], *, operation: str) -> QMimeData:
+        staged_paths: list[str] = []
+        if self._remote_drive_controller is not None:
+            staging_root = self._remote_export_staging_root()
+            for location in locations:
+                if not location.is_remote:
+                    continue
+                try:
+                    local_path = self._stage_remote_location_for_external_drag(location, staging_root)
+                except Exception as error:
+                    debug_log(
+                        "Remote external DND staging failed: "
+                        f"path={location.path!r} remote_id={location.remote_id!r} error={error}"
+                    )
+                    continue
+                staged_paths.append(QDir.cleanPath(str(local_path)))
+            self._cleanup_remote_export_staging(
+                staging_root,
+                keep_paths={Path(path) for path in staged_paths},
+            )
+
+        debug_log(
+            "Remote external mime build request: "
+            f"location_count={len(locations)} staged_paths={staged_paths[:10]} operation={operation}"
+        )
+
+        base_mime_data = None
+        if staged_paths:
+            staged_indexes = []
+            for staged_path in staged_paths:
+                index = self.model.index(staged_path)
+                if index.isValid():
+                    staged_indexes.append(index)
+            if staged_indexes:
+                try:
+                    base_mime_data = self.model.mimeData(staged_indexes)
+                except Exception as error:
+                    debug_log(
+                        "Remote external DND native mime build failed: "
+                        f"paths={staged_paths[:5]!r} error={error}"
+                    )
+
+        mime_data = self._drag_mime_codec.build_remote_mime_data(
+            locations,
+            operation=operation,
+            external_local_paths=staged_paths,
+            base_mime_data=base_mime_data,
+        )
+        debug_mime_data("Remote external mime build result", mime_data)
+        return mime_data
+
+    def _start_native_remote_export_drag(self, source_view, locations: list[PaneLocation]) -> bool:
+        if source_view is None or not locations:
+            debug_log(
+                "Remote native export drag aborted early: "
+                f"source_view={type(source_view).__name__ if source_view is not None else None} locations={len(locations) if locations is not None else 0}"
+            )
+            return False
+
+        staging_root = self._remote_export_staging_root()
+        debug_log(
+            "Remote native export drag start: "
+            f"source_view={type(source_view).__name__} staging_root={staging_root} locations={[location.path for location in locations[:10]]}"
+        )
+
+        staged_indexes = []
+        for location in locations:
+            if not location.is_remote or self._remote_drive_controller is None:
+                continue
+            try:
+                local_path = self._stage_remote_location_for_external_drag(location, staging_root)
+            except Exception as error:
+                debug_log(
+                    "Remote native export staging failed: "
+                    f"path={location.path!r} remote_id={location.remote_id!r} error={error}"
+                )
+                return False
+            index = self._remote_external_drag_model.index(QDir.cleanPath(str(local_path)))
+            if not index.isValid():
+                debug_log(
+                    "Remote native export staging index invalid: "
+                    f"path={str(local_path)!r}"
+                )
+                return False
+            staged_indexes.append(index)
+
+        self._cleanup_remote_export_staging(
+            staging_root,
+            keep_paths={Path(self._remote_external_drag_model.filePath(index)) for index in staged_indexes},
+        )
+
+        debug_log(
+            "Remote native export staged selection: "
+            f"count={len(staged_indexes)} paths={[self._remote_external_drag_model.filePath(index) for index in staged_indexes[:10]]}"
+        )
+
+        if not staged_indexes:
+            return False
+
+        remote_payload = json.dumps(
+            [
+                {
+                    "kind": location.kind,
+                    "path": location.path,
+                    "remote_id": location.remote_id,
+                }
+                for location in locations
+                if location.is_remote and location.remote_id
+            ]
+        ).encode("utf-8")
+        self._remote_external_drag_model.configure_remote_payload(
+            remote_payload,
+            operation=b"copy",
+        )
+        staging_root_index = self._remote_external_drag_model.index(str(staging_root))
+        staged_names = [Path(self._remote_external_drag_model.filePath(index)).name for index in staged_indexes]
+        original_name_filters = list(self._remote_external_drag_model.nameFilters())
+        original_name_filter_disables = self._remote_external_drag_model.nameFilterDisables()
+        helper_view = None
+
+        try:
+            self._remote_external_drag_model.setNameFilterDisables(False)
+            self._remote_external_drag_model.setNameFilters(staged_names)
+            if isinstance(source_view, QListView):
+                helper_view = QListView(self.widget)
+                helper_view.setViewMode(source_view.viewMode())
+                helper_view.setResizeMode(source_view.resizeMode())
+                helper_view.setMovement(source_view.movement())
+                helper_view.setWrapping(source_view.isWrapping())
+                helper_view.setWordWrap(source_view.wordWrap())
+                helper_view.setSpacing(source_view.spacing())
+            else:
+                helper_view = QTreeView(self.widget)
+                helper_view.setRootIsDecorated(source_view.rootIsDecorated() if hasattr(source_view, "rootIsDecorated") else True)
+                header = helper_view.header()
+                if header is not None and hasattr(source_view, "header") and source_view.header() is not None:
+                    header.setVisible(source_view.header().isVisible())
+            helper_view.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+            helper_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+            helper_view.setDragEnabled(True)
+            helper_view.setAcceptDrops(False)
+            helper_view.setDropIndicatorShown(False)
+            helper_view.setDefaultDropAction(Qt.DropAction.CopyAction)
+            helper_view.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+            helper_view.setModel(self._remote_external_drag_model)
+            if hasattr(helper_view, "setModelColumn"):
+                helper_view.setModelColumn(0)
+            if staging_root_index.isValid() and hasattr(helper_view, "setRootIndex"):
+                helper_view.setRootIndex(staging_root_index)
+            current_index = staged_indexes[0]
+
+            mime_data = self._remote_external_drag_model.mimeData(staged_indexes)
+            drag_source = helper_view.viewport() if hasattr(helper_view, "viewport") else helper_view
+            drag = QDrag(drag_source)
+            drag.setMimeData(mime_data)
+            preview = self._drag_visual_service.build_remote_drag_pixmap(self.widget, locations)
+            if preview is not None:
+                drag.setPixmap(preview)
+                drag.setHotSpot(QPoint(14, 14))
+            drag.exec(Qt.DropAction.CopyAction)
+            return True
+        except Exception as error:
+            debug_log(f"Remote native export drag start failed: {error}")
+            return False
+        finally:
+            self._remote_external_drag_model.setNameFilters(original_name_filters)
+            self._remote_external_drag_model.setNameFilterDisables(original_name_filter_disables)
+            if helper_view is not None:
+                helper_view.deleteLater()
 
     def _extract_remote_locations_from_mime(self, mime_data) -> list[PaneLocation]:
         return self._drag_mime_codec.extract_remote_locations(mime_data)
@@ -2346,29 +2583,6 @@ class PaneController(QObject):
             for task in tasks
         ]
 
-    def _log_drop_event_state(self, stage, event, source_paths=None, target_dir=None, watched_view=None):
-        mime_data = event.mimeData() if event is not None else None
-        try:
-            formats = list(mime_data.formats()) if mime_data is not None else []
-        except RuntimeError:
-            formats = []
-
-        source_name = type(event.source()).__name__ if event is not None and event.source() is not None else "None"
-        watched_name = type(watched_view).__name__ if watched_view is not None else "None"
-        action_name = "None"
-        if event is not None:
-            try:
-                action_name = str(event.dropAction())
-            except RuntimeError:
-                action_name = "RuntimeError"
-
-        debug_log(
-            "DND event: "
-            f"stage={stage} watched={watched_name} source={source_name} "
-            f"action={action_name} target_dir={target_dir!r} source_count={len(source_paths or [])} "
-            f"formats={formats}"
-        )
-
     def _cleanup_file_operation_state(self):
         if self._file_operation_progress_dialog is not None:
             try:
@@ -2749,7 +2963,7 @@ class PaneController(QObject):
                 transfer_result.errors[0],
             )
 
-        if not transfer_result.completed:
+        if not transfer_result.completed and not transfer_result.skipped_count:
             return False
 
         def finalize_local_to_remote():
@@ -2807,7 +3021,7 @@ class PaneController(QObject):
                 transfer_result.errors[0],
             )
 
-        if not transfer_result.completed:
+        if not transfer_result.completed and not transfer_result.skipped_count:
             return False
 
         def finalize_remote_to_local():
@@ -2870,7 +3084,7 @@ class PaneController(QObject):
                 transfer_result.errors[0],
             )
 
-        if not transfer_result.completed:
+        if not transfer_result.completed and not transfer_result.skipped_count:
             return False
 
         def finalize_remote_to_remote():
@@ -3819,10 +4033,13 @@ class PaneController(QObject):
             return
         if source_view is None:
             return
+        locations = self._drag_session_service.remote_drag_locations()
+        if self._start_native_remote_export_drag(source_view, locations):
+            return
         self._drag_session_service.start_remote_drag(
             widget=self.widget,
             source_view=source_view,
-            locations=self._drag_session_service.remote_drag_locations(),
+            locations=locations,
         )
 
     def can_offer_grouping(self):

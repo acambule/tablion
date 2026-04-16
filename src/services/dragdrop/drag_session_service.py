@@ -7,10 +7,11 @@ from debug_log import debug_log
 
 
 class DragSessionService:
-    def __init__(self, mime_codec, visual_service, remote_drag_guard):
+    def __init__(self, mime_codec, visual_service, remote_drag_guard, build_external_remote_mime_data=None):
         self._mime_codec = mime_codec
         self._visual_service = visual_service
         self._remote_drag_guard = remote_drag_guard
+        self._build_external_remote_mime_data = build_external_remote_mime_data
 
     def arm_remote_drag(self, *, source_view, start_pos: QPoint, locations) -> None:
         self._remote_drag_guard.arm(source_view=source_view, start_pos=start_pos, locations=locations)
@@ -41,7 +42,10 @@ class DragSessionService:
             debug_log("Remote drag start aborted: no selected remote locations")
             return
 
-        mime_data = self._mime_codec.build_remote_mime_data(drag_locations, operation="copy")
+        if self._build_external_remote_mime_data is not None:
+            mime_data = self._build_external_remote_mime_data(drag_locations, operation="copy")
+        else:
+            mime_data = self._mime_codec.build_remote_mime_data(drag_locations, operation="copy")
         debug_log(f"Remote drag mime formats={mime_data.formats()}")
         drag_source = source_view.viewport() if hasattr(source_view, "viewport") else source_view
         debug_log(f"Remote drag source widget={type(drag_source).__name__}")
