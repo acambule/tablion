@@ -1884,16 +1884,12 @@ class PaneController(QObject):
         staging_root.mkdir(parents=True, exist_ok=True)
         return staging_root
 
-    def _remote_export_staging_name(self, location: PaneLocation) -> str:
+    def _remote_export_staging_relative_path(self, location: PaneLocation) -> Path:
         source_name = PurePosixPath(str(location.path or "/")).name.strip() or "Element"
-        suffixes = PurePosixPath(source_name).suffixes
-        suffix = "".join(suffixes)
-        stem = source_name[: -len(suffix)] if suffix else source_name
-        stem = stem or source_name
         digest = hashlib.sha1(
             f"{location.remote_id or ''}|{location.path or ''}".encode("utf-8")
         ).hexdigest()[:12]
-        return f"{stem}.{digest}{suffix}" if suffix else f"{stem}.{digest}"
+        return Path(str(location.remote_id or "remote")) / digest / source_name
 
     def _cleanup_remote_export_staging(self, staging_root: Path, *, keep_paths: set[Path] | None = None) -> None:
         keep_paths = {path.resolve() for path in (keep_paths or set())}
@@ -1903,7 +1899,10 @@ class PaneController(QObject):
                 resolved_candidate = candidate.resolve()
             except OSError:
                 resolved_candidate = candidate
-            if resolved_candidate in keep_paths:
+            if any(
+                keep_path == resolved_candidate or resolved_candidate in keep_path.parents
+                for keep_path in keep_paths
+            ):
                 continue
             try:
                 age_seconds = now - int(candidate.stat().st_mtime)
@@ -1920,10 +1919,12 @@ class PaneController(QObject):
     def _stage_remote_location_for_external_drag(self, location: PaneLocation, staging_root: Path) -> Path:
         if self._remote_drive_controller is None:
             raise RuntimeError("Remote drive controller is unavailable")
-        stable_name = self._remote_export_staging_name(location)
+        relative_target = self._remote_export_staging_relative_path(location)
+        target_directory = staging_root / relative_target.parent
+        stable_name = relative_target.name
         local_path = self._remote_drive_controller.transfer_item_to_local(
             location,
-            staging_root,
+            target_directory,
             target_name=stable_name,
             overwrite=True,
         )
