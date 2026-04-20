@@ -386,7 +386,7 @@ class PaneController(QObject):
         self.setup_search_ui()
         self.set_show_hidden_files(self._show_hidden_files, persist=False, refresh=False)
 
-        self.add_tab("Tab 1", self.current_location.path)
+        self.add_tab("Tab 1", self.current_location)
 
     def _active_file_model(self):
         if self.current_location is not None and self.current_location.is_remote:
@@ -1065,12 +1065,23 @@ class PaneController(QObject):
         return icon
 
     def add_tab(self, title, path):
-        location = self._resolve_local_location(path)
+        if isinstance(path, PaneLocation):
+            location = path if path.is_remote else self._resolve_local_location(path.path)
+        else:
+            location = self._resolve_local_location(path)
         if location is None:
-            location = self._pane_state_service.make_location(QDir.cleanPath(path))
-        state = TabState(title=title, location=location)
+            fallback_path = path.path if isinstance(path, PaneLocation) else path
+            location = self._pane_state_service.make_location(QDir.cleanPath(str(fallback_path or "")))
+
+        tab_title = self._navigation_service.display_name_for_location(location)
+        if location.is_remote and self._remote_drive_controller is not None:
+            tab_title = self._remote_drive_controller.display_name_for_location(location)
+        if not str(tab_title or "").strip():
+            tab_title = title
+
+        state = TabState(title=tab_title, location=location)
         self.tab_states.append(state)
-        index = self.tab_bar.addTab(title)
+        index = self.tab_bar.addTab(tab_title)
         self.update_tab_visual(index)
 
         if self.active_tab_index == -1:
@@ -1227,7 +1238,7 @@ class PaneController(QObject):
                 tab_index = self.tab_bar.tabAt(event.position().toPoint())
                 if tab_index == -1:
                     new_index = len(self.tab_states) + 1
-                    self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", self.current_location.path)
+                    self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", self.current_location)
                     self.tab_bar.setCurrentIndex(len(self.tab_states) - 1)
                     return True
                 self.toggle_tab_pin(tab_index)
@@ -1273,7 +1284,7 @@ class PaneController(QObject):
                 chosen_action = menu.exec(event.globalPos())
                 if chosen_action == action_new_tab:
                     new_index = len(self.tab_states) + 1
-                    self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", self.current_location.path)
+                    self.add_tab(f"{app_tr('PaneController', 'Tab')} {new_index}", self.current_location)
                     self.tab_bar.setCurrentIndex(len(self.tab_states) - 1)
                     return True
                 if chosen_action == action_close and tab_index != -1:
@@ -2077,7 +2088,7 @@ class PaneController(QObject):
             if preview is not None:
                 drag.setPixmap(preview)
                 drag.setHotSpot(QPoint(14, 14))
-            drag.exec(Qt.DropAction.CopyAction)
+            drag.exec(Qt.DropAction.CopyAction | Qt.DropAction.MoveAction)
             return True
         except Exception as error:
             debug_log(f"Remote native export drag start failed: {error}")
@@ -4067,7 +4078,7 @@ class PaneController(QObject):
         self.tab_bar.blockSignals(False)
 
         if not self.tab_states:
-            self.add_tab("Tab 1", self.current_location.path)
+            self.add_tab("Tab 1", self.current_location)
             return
 
         active_index = max(0, min(active_index, len(self.tab_states) - 1))

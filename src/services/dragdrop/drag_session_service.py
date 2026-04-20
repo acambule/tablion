@@ -56,5 +56,5 @@ class DragSessionService:
             drag.setPixmap(preview)
             drag.setHotSpot(QPoint(18, 18))
         debug_log("Remote drag object created and mime data attached")
-        drag.exec(Qt.DropAction.CopyAction)
+        drag.exec(Qt.DropAction.CopyAction | Qt.DropAction.MoveAction)
         debug_log("Remote drag exec returned")
