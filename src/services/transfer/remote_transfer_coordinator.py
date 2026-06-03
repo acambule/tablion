@@ -223,6 +223,8 @@ class RemoteTransferCoordinator:
         dialog.setAutoClose(False)
         dialog.setAutoReset(False)
         dialog.setCancelButton(None)
+        dialog.setMinimumSize(560, 150)
+        dialog.resize(640, 180)
         dialog.setValue(0)
         dialog.show()
         return dialog

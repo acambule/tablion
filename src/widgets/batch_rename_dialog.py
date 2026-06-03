@@ -23,7 +23,8 @@ class BatchRenameDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(app_tr("BatchRenameDialog", "Mehrfach umbenennen"))
         self.setModal(True)
-        self.resize(520, 220)
+        self.setMinimumSize(620, 300)
+        self.resize(680, 340)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)

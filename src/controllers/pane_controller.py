@@ -23,6 +23,7 @@ from controllers.remote_drive_controller import RemoteDriveController
 from controllers.view_adapters import IconViewAdapter, TreeViewAdapter
 from domain.filesystem import PaneLocation
 from models.file_operations import FileOperations
+from models.browser_sort_proxy_model import BrowserSortProxyModel
 from models.remote_external_drag_model import RemoteExternalDragModel
 from models.remote_file_tree_model import RemoteFileItem, RemoteFileTreeModel
 from services.file_actions import (
@@ -261,6 +262,8 @@ class PaneController(QObject):
         self.model = file_system_model
         self._remote_drive_controller = remote_drive_controller
         self._remote_model = RemoteFileTreeModel(self)
+        self._browser_model = BrowserSortProxyModel(self)
+        self._browser_model.setSourceModel(self.model)
         self._remote_external_drag_model = RemoteExternalDragModel(
             remote_clipboard_mime_type=self._REMOTE_CLIPBOARD_MIME_TYPE,
             clipboard_operation_mime_type=self._CLIPBOARD_OPERATION_MIME_TYPE,
@@ -389,25 +392,44 @@ class PaneController(QObject):
         self.add_tab("Tab 1", self.current_location)
 
     def _active_file_model(self):
-        if self.current_location is not None and self.current_location.is_remote:
-            return self._remote_model
-        return self.model
+        tree_view = getattr(self, "tree_view", None)
+        if tree_view is not None and tree_view.model() is not None:
+            return tree_view.model()
+        return self._browser_model
 
     def _apply_browser_model(self, model) -> None:
-        if self.tree_view is not None and self.tree_view.model() is not model:
-            self.tree_view.setModel(model)
-        if self.icon_view is not None and self.icon_view.model() is not model:
-            self.icon_view.setModel(model)
-            self.icon_view.setModelColumn(0)
+        if self._browser_model.sourceModel() is not model:
+            self._browser_model.setSourceModel(model)
+        tree_view = getattr(self, "tree_view", None)
+        icon_view = getattr(self, "icon_view", None)
+        if tree_view is not None and tree_view.model() is not self._browser_model:
+            tree_view.setModel(self._browser_model)
+        if icon_view is not None and icon_view.model() is not self._browser_model:
+            icon_view.setModel(self._browser_model)
+            icon_view.setModelColumn(0)
 
         if self.tree_view_adapter is not None:
-            self.tree_view_adapter.file_model = model
+            self.tree_view_adapter.file_model = self._browser_model
         if self.icon_view_adapter is not None:
-            self.icon_view_adapter.file_model = model
+            self.icon_view_adapter.file_model = self._browser_model
         if getattr(self, "_drop_target_delegate", None) is not None:
-            self._drop_target_delegate._file_model = model
+            self._drop_target_delegate._file_model = self._browser_model
         if getattr(self, "_icon_view_delegate", None) is not None:
-            self._icon_view_delegate._file_model = model
+            self._icon_view_delegate._file_model = self._browser_model
+
+    def _browser_index_from_source(self, index):
+        if self._browser_model is None or not getattr(index, "isValid", lambda: False)():
+            return index
+        if self._browser_model.sourceModel() is None:
+            return index
+        return self._browser_model.mapFromSource(index)
+
+    def _source_index_from_browser(self, index):
+        if self._browser_model is None or not getattr(index, "isValid", lambda: False)():
+            return index
+        if self._browser_model.sourceModel() is None:
+            return index
+        return self._browser_model.mapToSource(index)
 
     def _set_remote_view_interaction_enabled(self, enabled: bool) -> None:
         for view in (self.tree_view, self.icon_view):
@@ -462,7 +484,7 @@ class PaneController(QObject):
 
     def setup_tree_view(self):
         self.tree_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.tree_view.setModel(self.model)
+        self.tree_view.setModel(self._browser_model)
         self._apply_tree_header_translations()
         header = self.tree_view.header()
         if header is not None:
@@ -489,11 +511,11 @@ class PaneController(QObject):
         self.tree_view.installEventFilter(self)
         self.tree_view.viewport().installEventFilter(self)
 
-        self.tree_view_adapter = TreeViewAdapter(self.tree_view, self.model)
+        self.tree_view_adapter = TreeViewAdapter(self.tree_view, self._browser_model)
 
         self._drop_target_delegate = DropTargetHighlightDelegate(
             self.tree_view,
-            file_model=self.model,
+            file_model=self._browser_model,
             enable_drop_highlight=True,
         )
         self.tree_view.setItemDelegate(self._drop_target_delegate)
@@ -547,7 +569,7 @@ class PaneController(QObject):
             if loaded != requested:
                 return
 
-            root_index = self.model.index(self._pending_root_path)
+            root_index = self._browser_index_from_source(self.model.index(self._pending_root_path))
             if root_index.isValid():
                 self.tree_view.collapseAll()
                 self.tree_view.setRootIndex(root_index)
@@ -582,7 +604,7 @@ class PaneController(QObject):
             return
 
     def _restore_index_for_path(self, path: str):
-        return self.model.index(path)
+        return self._browser_index_from_source(self.model.index(path))
 
     def _restore_select_index(self, index) -> None:
         if not getattr(index, "isValid", lambda: False)():
@@ -600,7 +622,7 @@ class PaneController(QObject):
     def setup_icon_view(self):
         self.icon_view = QListView(self.widget)
         self.icon_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.icon_view.setModel(self.model)
+        self.icon_view.setModel(self._browser_model)
         self.icon_view.setModelColumn(0)
         self.icon_view.setViewMode(QListView.ViewMode.IconMode)
         self.icon_view.setResizeMode(QListView.ResizeMode.Adjust)
@@ -636,7 +658,7 @@ class PaneController(QObject):
 
         self._icon_view_delegate = DropTargetHighlightDelegate(
             self.icon_view,
-            file_model=self.model,
+            file_model=self._browser_model,
             enable_drop_highlight=False,
         )
         self.icon_view.setItemDelegate(self._icon_view_delegate)
@@ -645,7 +667,7 @@ class PaneController(QObject):
         if icon_delegate is not None:
             icon_delegate.closeEditor.connect(self.on_delegate_close_editor)
 
-        self.icon_view_adapter = IconViewAdapter(self.icon_view, self.model)
+        self.icon_view_adapter = IconViewAdapter(self.icon_view, self._browser_model)
 
     def update_cut_visual_state(self):
         cut_paths = set(self._cut_paths)
@@ -972,12 +994,13 @@ class PaneController(QObject):
             or self._remote_drive_controller is None
         ):
             return
-        if not index.isValid() or self.tree_view is None or self.tree_view.model() is not self._remote_model:
+        if not index.isValid() or self.tree_view is None or self._browser_model.sourceModel() is not self._remote_model:
             return
-        if not self._remote_model.isDir(index) or self._remote_model.children_loaded(index):
+        source_index = self._source_index_from_browser(index)
+        if not self._remote_model.isDir(source_index) or self._remote_model.children_loaded(source_index):
             return
 
-        child_path = self._remote_model.filePath(index)
+        child_path = self._remote_model.filePath(source_index)
         if not child_path:
             return
 
@@ -992,7 +1015,7 @@ class PaneController(QObject):
             self.show_operation_feedback(str(error))
             return
 
-        self._remote_model.set_children_for_index(index, self._filtered_remote_entries(entries))
+        self._remote_model.set_children_for_index(source_index, self._filtered_remote_entries(entries))
         self.apply_current_sort()
         self.optimize_columns()
 
@@ -2693,6 +2716,8 @@ class PaneController(QObject):
         self._file_operation_progress_dialog.setAutoClose(False)
         self._file_operation_progress_dialog.setAutoReset(False)
         self._file_operation_progress_dialog.setCancelButton(None)
+        self._file_operation_progress_dialog.setMinimumSize(560, 150)
+        self._file_operation_progress_dialog.resize(640, 180)
         self._file_operation_progress_dialog.setValue(0)
         self._file_operation_progress_dialog.show()
 
@@ -3131,7 +3156,7 @@ class PaneController(QObject):
         self.filesystemMutationCommitted.emit()
         self.show_operation_feedback(app_tr("PaneController", "Ordner erstellt"))
 
-        new_index = self.model.index(str(candidate))
+        new_index = self._browser_index_from_source(self.model.index(str(candidate)))
         if new_index.isValid():
             adapter = self.active_view_adapter()
             active_view = self.active_item_view()
@@ -3143,7 +3168,7 @@ class PaneController(QObject):
         def select_later():
             if self._dispose_prepared:
                 return
-            later_index = self.model.index(str(candidate))
+            later_index = self._browser_index_from_source(self.model.index(str(candidate)))
             if later_index.isValid():
                 adapter = self.active_view_adapter()
                 active_view = self.active_item_view()
@@ -3194,7 +3219,7 @@ class PaneController(QObject):
         self.filesystemMutationCommitted.emit()
         self.show_operation_feedback(app_tr("PaneController", "Datei erstellt"))
 
-        new_index = self.model.index(str(candidate))
+        new_index = self._browser_index_from_source(self.model.index(str(candidate)))
         if new_index.isValid():
             adapter = self.active_view_adapter()
             active_view = self.active_item_view()
@@ -3206,7 +3231,7 @@ class PaneController(QObject):
         def select_later():
             if self._dispose_prepared:
                 return
-            later_index = self.model.index(str(candidate))
+            later_index = self._browser_index_from_source(self.model.index(str(candidate)))
             if later_index.isValid():
                 adapter = self.active_view_adapter()
                 active_view = self.active_item_view()
@@ -4281,6 +4306,7 @@ class PaneController(QObject):
         self._pending_root_path = target_path
         root_index = self.model.setRootPath(target_path)
         index = root_index if root_index.isValid() else self.model.index(target_path)
+        index = self._browser_index_from_source(index)
         if index.isValid():
             self.tree_view.collapseAll()
             self.tree_view.setRootIndex(index)
