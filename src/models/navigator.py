@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QAbstractItemView, QHeaderView, QSty
 
 from localization import app_tr
 from domain.filesystem import PaneLocation
+from widgets.icon_picker_dialog import IconPickerDialog
 
 
 ROLE_PATH = Qt.ItemDataRole.UserRole
@@ -94,12 +95,13 @@ class NavigatorManager(QObject):
     remoteMountEditRequested = Signal(str)
     remoteCloudSettingsRequested = Signal()
 
-    def __init__(self, widget: QTreeWidget, data_path: Path, remote_mount_settings=None, remote_connection_settings=None):
+    def __init__(self, widget: QTreeWidget, data_path: Path, remote_mount_settings=None, remote_connection_settings=None, editor_settings=None):
         super().__init__(widget)
         self.widget = widget
         self.data_path = data_path
         self.remote_mount_settings = remote_mount_settings
         self.remote_connection_settings = remote_connection_settings
+        self.editor_settings = editor_settings
         self.loaded_data = {"groups": []}
         self.allowed_drop_groups = {"Places", "Cloud"}
         self._drop_indicator_item = None
@@ -838,6 +840,16 @@ class NavigatorManager(QObject):
                     self.resolve_icon('edit-rename', QStyle.StandardPixmap.SP_FileDialogDetailedView),
                     app_tr('NavigatorManager', 'Umbenennen'),
                 )
+                change_icon_action = menu.addAction(
+                    self.resolve_icon('preferences-desktop-theme', QStyle.StandardPixmap.SP_FileDialogInfoView),
+                    app_tr('NavigatorManager', 'Icon ändern…'),
+                )
+                reset_icon_action = menu.addAction(
+                    self.resolve_icon('edit-clear', QStyle.StandardPixmap.SP_DialogResetButton),
+                    app_tr('NavigatorManager', 'Icon zurücksetzen'),
+                )
+                current_icon = str(item.data(0, ROLE_ICON) or '').strip()
+                reset_icon_action.setEnabled(bool(current_icon) and current_icon != 'folder')
                 delete_action = menu.addAction(
                     self.resolve_icon('edit-delete', QStyle.StandardPixmap.SP_TrashIcon),
                     app_tr('NavigatorManager', 'Löschen'),
@@ -845,6 +857,10 @@ class NavigatorManager(QObject):
                 chosen = menu.exec(self.widget.viewport().mapToGlobal(pos))
                 if chosen == rename_action:
                     self.rename_custom_entry(item)
+                if chosen == change_icon_action:
+                    self.change_custom_entry_icon(item)
+                if chosen == reset_icon_action:
+                    self.reset_custom_entry_icon(item)
                 if chosen == delete_action:
                     self.delete_custom_entry(item)
                 return
@@ -1054,6 +1070,27 @@ class NavigatorManager(QObject):
             return
 
         item.setText(0, new_name)
+        self.save_current_state()
+        self.loaded_data = self.load_data()
+
+    def change_custom_entry_icon(self, item):
+        if item is None or item.data(0, ROLE_KIND) != 'entry':
+            return
+        current_icon = str(item.data(0, ROLE_ICON) or '').strip()
+        dialog = IconPickerDialog(self.widget, current_icon)
+        if dialog.exec() != IconPickerDialog.DialogCode.Accepted:
+            return
+        new_icon = dialog.icon_value().strip() or 'folder'
+        item.setData(0, ROLE_ICON, new_icon)
+        item.setIcon(0, self.resolve_icon(new_icon, QStyle.StandardPixmap.SP_DirIcon))
+        self.save_current_state()
+        self.loaded_data = self.load_data()
+
+    def reset_custom_entry_icon(self, item):
+        if item is None or item.data(0, ROLE_KIND) != 'entry':
+            return
+        item.setData(0, ROLE_ICON, 'folder')
+        item.setIcon(0, self.resolve_icon('folder', QStyle.StandardPixmap.SP_DirIcon))
         self.save_current_state()
         self.loaded_data = self.load_data()
 
@@ -1306,6 +1343,8 @@ class NavigatorManager(QObject):
         return dynamic_entry
 
     def _remote_entries(self):
+        if self.editor_settings is not None and not bool(getattr(self.editor_settings, "remote_enabled", True)):
+            return []
         if self.remote_mount_settings is None:
             return []
         if not hasattr(self.remote_mount_settings, "build_navigator_entries"):

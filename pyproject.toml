@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 name = "tablion-file-manager"
 
 # RPM-Version (Versionsnummer der Anwendung)
-version = "0.9.6"
+version = "0.9.8"
 
 # RPM-Description (Beschreibung)
 description = "Dateimanager mit Tabgruppen, Multi-View und smarter Dateiorganisation"
@@ -29,4 +29,4 @@ include-package-data = true
 
 [tool.rpm]
 # RPM-Release-Nummer (Buildnummer)
-release = "7"
+release = "0"

@@ -110,6 +110,7 @@ class MainWindow(QMainWindow):
         self.setup_shortcuts()
         self.cleanup_stale_local_office_web_sessions()
         self.load_session_state()
+        self.apply_remote_feature_state()
 
         QTimer.singleShot(0, self.focus_active_tree_view)
 
@@ -261,7 +262,12 @@ class MainWindow(QMainWindow):
         if _new is not None:
             self.schedule_local_office_web_sync_check()
 
+    def _is_remote_feature_enabled(self) -> bool:
+        return bool(self.editor_settings is None or getattr(self.editor_settings, "remote_enabled", True))
+
     def schedule_local_office_web_sync_check(self):
+        if not self._is_remote_feature_enabled():
+            return
         if self._local_office_sync_check_in_progress or self._local_office_sync_check_scheduled:
             return
         now = time.time()
@@ -272,6 +278,8 @@ class MainWindow(QMainWindow):
 
     def sync_local_office_web_sessions_from_remote(self):
         self._local_office_sync_check_scheduled = False
+        if not self._is_remote_feature_enabled():
+            return
         if self._local_office_sync_check_in_progress:
             return
         if self.local_office_web_session_store is None or self.remote_drive_controller is None:
@@ -835,6 +843,8 @@ class MainWindow(QMainWindow):
         self.apply_session_payload(payload)
 
     def cleanup_stale_local_office_web_sessions(self, max_age_days: int = 7):
+        if not self._is_remote_feature_enabled():
+            return
         if self.local_office_web_session_store is None or self.remote_drive_controller is None:
             return
         stale_sessions = self.local_office_web_session_store.stale_sessions(
@@ -1112,6 +1122,7 @@ class MainWindow(QMainWindow):
             self.navigator_data_path,
             remote_mount_settings=self.remote_mount_settings,
             remote_connection_settings=self.remote_connection_settings,
+            editor_settings=self.editor_settings,
         )
         self.navigator_manager.setup()
         navigator_widget.itemClicked.connect(self.on_nav_click)
@@ -1183,6 +1194,19 @@ class MainWindow(QMainWindow):
                 continue
             try:
                 pane.refresh_current_directory(force_rescan=True)
+            except RuntimeError:
+                continue
+
+    def apply_remote_feature_state(self):
+        if self.navigator_manager is not None:
+            self.navigator_manager.refresh()
+        if self.group_controller is None:
+            return
+        for pane in list(self.group_controller.group_panes_by_page.values()):
+            if pane is None or not hasattr(pane, "apply_remote_feature_state"):
+                continue
+            try:
+                pane.apply_remote_feature_state()
             except RuntimeError:
                 continue
 
@@ -1305,6 +1329,7 @@ class MainWindow(QMainWindow):
             )
             self._settings_dialog.settingsChanged.connect(self.apply_tab_close_icon_settings)
             self._settings_dialog.settingsChanged.connect(self.refresh_navigator)
+            self._settings_dialog.settingsChanged.connect(self.apply_remote_feature_state)
             self._settings_dialog.settingsChanged.connect(self.refresh_all_panes)
             self._settings_dialog.languagePreferenceChanged.connect(self.on_language_preference_changed)
             self._settings_dialog.sessionExportRequested.connect(self.on_session_export_requested)

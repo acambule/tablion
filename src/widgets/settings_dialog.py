@@ -125,6 +125,7 @@ class SettingsDialog(QDialog):
         self._mount_status_label = None
         self._remote_clouds_page = None
         self._remote_clouds_tabs = None
+        self._remote_enabled_checkbox = None
         self._remote_open_extensions_line_edit = None
         self._remote_open_command_line_edit = None
         self._remote_open_arguments_line_edit = None
@@ -178,6 +179,9 @@ class SettingsDialog(QDialog):
 
         if self._show_file_tab_close_icons_checkbox:
             self._show_file_tab_close_icons_checkbox.setChecked(self._editor_settings.show_file_tab_close_icons)
+        if self._remote_enabled_checkbox is not None:
+            self._remote_enabled_checkbox.setChecked(bool(getattr(self._editor_settings, "remote_enabled", True)))
+            self._apply_remote_enabled_ui_state(self._remote_enabled_checkbox.isChecked())
         if self._local_office_web_enabled_checkbox is not None:
             self._local_office_web_enabled_checkbox.setChecked(
                 self._editor_settings.local_office_web_editing_enabled
@@ -249,6 +253,13 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
+        header_row = QHBoxLayout()
+        header_row.addStretch(1)
+        self._remote_enabled_checkbox = QCheckBox(app_tr("SettingsDialog", "Aktivieren"), page)
+        self._remote_enabled_checkbox.toggled.connect(self._apply_remote_enabled_ui_state)
+        header_row.addWidget(self._remote_enabled_checkbox)
+        layout.addLayout(header_row)
+
         tabs = QTabWidget(page)
         self._remote_clouds_page = page
         self._remote_clouds_tabs = tabs
@@ -262,6 +273,10 @@ class SettingsDialog(QDialog):
         remote_item = QListWidgetItem(app_tr("SettingsDialog", "Remote-Clouds"))
         remote_item.setIcon(QIcon.fromTheme("folder-cloud"))
         self._categories_list.addItem(remote_item)
+
+    def _apply_remote_enabled_ui_state(self, enabled: bool) -> None:
+        if self._remote_clouds_tabs is not None:
+            self._remote_clouds_tabs.setEnabled(bool(enabled))
 
     def _build_connections_tab(self) -> QWidget:
         page = QWidget(self)
@@ -1397,6 +1412,9 @@ class SettingsDialog(QDialog):
             self._editor_settings.update_show_group_tab_close_icons(self._show_group_tab_close_icons_checkbox.isChecked())
         if self._show_file_tab_close_icons_checkbox:
             self._editor_settings.update_show_file_tab_close_icons(self._show_file_tab_close_icons_checkbox.isChecked())
+        self._editor_settings.update_remote_enabled(
+            self._remote_enabled_checkbox.isChecked() if self._remote_enabled_checkbox is not None else True
+        )
         self._editor_settings.update_remote_open_rules(self._remote_open_rule_rows)
         self._editor_settings.update_local_office_web_editing(
             enabled=self._local_office_web_enabled_checkbox.isChecked() if self._local_office_web_enabled_checkbox else False,

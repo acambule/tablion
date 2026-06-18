@@ -16,6 +16,7 @@ class EditorSettings:
         self._middle_click_new_tab_behavior = "background"
         self._visible_file_tree_columns = [0, 1, 2, 3]
         self._show_hidden_files = False
+        self._remote_enabled = True
         self._settings_dialog_width = 920
         self._settings_dialog_height = 620
         self._remote_open_rules = []
@@ -74,6 +75,10 @@ class EditorSettings:
     @property
     def settings_dialog_height(self) -> int:
         return int(self._settings_dialog_height)
+
+    @property
+    def remote_enabled(self) -> bool:
+        return bool(self._remote_enabled)
 
     @property
     def remote_open_rules(self) -> list[dict]:
@@ -164,6 +169,7 @@ class EditorSettings:
             payload.get("visible_file_tree_columns", [0, 1, 2, 3])
         )
         self._show_hidden_files = bool(payload.get("show_hidden_files", False))
+        self._remote_enabled = bool(payload.get("remote_enabled", True))
         self._remote_open_rules = self._normalize_remote_open_rules(payload.get("remote_open_rules", []))
         self._local_office_web_editing_enabled = bool(payload.get("local_office_web_editing_enabled", False))
         self._local_office_web_connection_id = str(payload.get("local_office_web_connection_id") or "").strip()
@@ -193,6 +199,7 @@ class EditorSettings:
             "middle_click_new_tab_behavior": self._middle_click_new_tab_behavior,
             "visible_file_tree_columns": list(self._visible_file_tree_columns),
             "show_hidden_files": self._show_hidden_files,
+            "remote_enabled": self._remote_enabled,
             "remote_open_rules": list(self._remote_open_rules),
             "local_office_web_editing_enabled": self._local_office_web_editing_enabled,
             "local_office_web_connection_id": self._local_office_web_connection_id,
@@ -270,6 +277,13 @@ class EditorSettings:
         if normalized == self._show_hidden_files:
             return
         self._show_hidden_files = normalized
+        self.save()
+
+    def update_remote_enabled(self, value: bool) -> None:
+        normalized = bool(value)
+        if normalized == self._remote_enabled:
+            return
+        self._remote_enabled = normalized
         self.save()
 
     def update_settings_dialog_size(self, width: int, height: int) -> None:

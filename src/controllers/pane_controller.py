@@ -445,6 +445,43 @@ class PaneController(QObject):
             return self._remote_drive_controller.display_name_for_location(location)
         return ""
 
+    def _is_remote_feature_enabled(self) -> bool:
+        return bool(self._editor_settings is None or getattr(self._editor_settings, "remote_enabled", True))
+
+    def _show_remote_disabled_feedback(self) -> None:
+        self.show_operation_feedback(app_tr("PaneController", "Remote-Funktion ist deaktiviert"))
+
+    def _default_local_location(self) -> PaneLocation:
+        return self._pane_state_service.make_location(QDir.homePath())
+
+    def _coerce_remote_disabled_location(
+        self,
+        location: PaneLocation | None,
+        *,
+        fallback_to_local: bool,
+        announce: bool = False,
+    ) -> PaneLocation | None:
+        if location is None or not location.is_remote or self._is_remote_feature_enabled():
+            return location
+        if announce:
+            self._show_remote_disabled_feedback()
+        if fallback_to_local:
+            return self._default_local_location()
+        return None
+
+    def _remote_action_allowed(self, *, announce: bool = False) -> bool:
+        if not self._is_remote_feature_enabled():
+            if announce:
+                self._show_remote_disabled_feedback()
+            return False
+        if self._remote_drive_controller is None:
+            if announce:
+                self.show_operation_feedback(
+                    app_tr("PaneController", "Remote-Kontexte sind im Pane noch nicht aktiviert")
+                )
+            return False
+        return True
+
     def _treat_remote_dot_entries_as_hidden(self) -> bool:
         return bool(getattr(self._editor_settings, "treat_dot_entries_as_hidden_remote", False))
 
@@ -757,7 +794,7 @@ class PaneController(QObject):
         self.update_navigation_buttons()
 
     def _path_bar_remote_subdirectories(self, location: PaneLocation):
-        if self._remote_drive_controller is None or location is None or not location.is_remote:
+        if not self._remote_action_allowed() or location is None or not location.is_remote:
             return []
         return self._remote_drive_controller.list_subdirectory_targets(location)
 
@@ -1095,6 +1132,7 @@ class PaneController(QObject):
         if location is None:
             fallback_path = path.path if isinstance(path, PaneLocation) else path
             location = self._pane_state_service.make_location(QDir.cleanPath(str(fallback_path or "")))
+        location = self._coerce_remote_disabled_location(location, fallback_to_local=True)
 
         tab_title = self._navigation_service.display_name_for_location(location)
         if location.is_remote and self._remote_drive_controller is not None:
@@ -1127,6 +1165,7 @@ class PaneController(QObject):
             location = path if path.is_remote else self._resolve_local_location(path.path)
         else:
             location = self._resolve_local_location(path)
+        location = self._coerce_remote_disabled_location(location, fallback_to_local=True, announce=True)
         if location is None:
             return
 
@@ -1954,6 +1993,8 @@ class PaneController(QObject):
         return Path(local_path)
 
     def _build_external_remote_drag_mime_data(self, locations: list[PaneLocation], *, operation: str) -> QMimeData:
+        if not self._remote_action_allowed():
+            return self._drag_mime_codec.build_remote_mime_data([], operation=operation)
         staged_paths: list[str] = []
         if self._remote_drive_controller is not None:
             staging_root = self._remote_export_staging_root()
@@ -2005,6 +2046,8 @@ class PaneController(QObject):
         return mime_data
 
     def _start_native_remote_export_drag(self, source_view, locations: list[PaneLocation]) -> bool:
+        if not self._remote_action_allowed():
+            return False
         if source_view is None or not locations:
             debug_log(
                 "Remote native export drag aborted early: "
@@ -2127,7 +2170,7 @@ class PaneController(QObject):
         return self._drag_mime_codec.extract_remote_locations(mime_data)
 
     def _download_remote_file_for_open(self, location: PaneLocation) -> str | None:
-        if self._remote_drive_controller is None:
+        if not self._remote_action_allowed(announce=True):
             return None
         try:
             cached_path = self._remote_drive_controller.download_file_to_cache(location)
@@ -2182,13 +2225,15 @@ class PaneController(QObject):
             return False
 
     def _open_remote_file_via_rule(self, location: PaneLocation) -> bool:
+        if not self._remote_action_allowed():
+            return False
         remote_url = self._selected_remote_file_url(location)
         if not remote_url:
             return False
         return self._open_url_via_rule(location.path, remote_url)
 
     def _local_office_web_editing_enabled_for(self, path: str) -> bool:
-        if self._editor_settings is None or self._remote_drive_controller is None:
+        if self._editor_settings is None or not self._remote_action_allowed():
             return False
         if not self._editor_settings.local_office_web_editing_enabled:
             return False
@@ -2249,6 +2294,8 @@ class PaneController(QObject):
         return True
 
     def _open_remote_file_in_browser(self, location: PaneLocation) -> bool:
+        if not self._remote_action_allowed(announce=True):
+            return False
         remote_url = self._selected_remote_file_url(location)
         if not remote_url:
             return False
@@ -2968,7 +3015,9 @@ class PaneController(QObject):
         move: bool = False,
         clear_clipboard_on_success: bool = False,
     ):
-        if self.current_location is None or not self.current_location.is_remote or self._remote_drive_controller is None:
+        if not self._remote_action_allowed(announce=True):
+            return False
+        if self.current_location is None or not self.current_location.is_remote:
             return False
         destination_path = QDir.cleanPath(str(target_directory or self.current_location.path))
         destination = PaneLocation(
@@ -3028,7 +3077,7 @@ class PaneController(QObject):
         move: bool = False,
         clear_clipboard_on_success: bool = False,
     ):
-        if self._remote_drive_controller is None:
+        if not self._remote_action_allowed(announce=True):
             return False
 
         destination_path = QDir.cleanPath(str(target_directory or self.resolve_drop_target_directory()))
@@ -3089,7 +3138,9 @@ class PaneController(QObject):
         move: bool = False,
         clear_clipboard_on_success: bool = False,
     ):
-        if self.current_location is None or not self.current_location.is_remote or self._remote_drive_controller is None:
+        if not self._remote_action_allowed(announce=True):
+            return False
+        if self.current_location is None or not self.current_location.is_remote:
             return False
 
         destination_path = QDir.cleanPath(str(target_directory or self.current_location.path))
@@ -3183,7 +3234,9 @@ class PaneController(QObject):
         return candidate
 
     def _create_remote_folder(self, target_directory=None, base_name=None):
-        if self.current_location is None or not self.current_location.is_remote or self._remote_drive_controller is None:
+        if not self._remote_action_allowed(announce=True):
+            return None
+        if self.current_location is None or not self.current_location.is_remote:
             return None
 
         destination_path = QDir.cleanPath(str(target_directory or self.resolve_drop_target_directory()))
@@ -3246,7 +3299,9 @@ class PaneController(QObject):
         return candidate
 
     def _create_remote_file(self, target_directory=None, base_name=None):
-        if self.current_location is None or not self.current_location.is_remote or self._remote_drive_controller is None:
+        if not self._remote_action_allowed(announce=True):
+            return None
+        if self.current_location is None or not self.current_location.is_remote:
             return None
 
         destination_path = QDir.cleanPath(str(target_directory or self.resolve_drop_target_directory()))
@@ -3296,6 +3351,8 @@ class PaneController(QObject):
         QTimer.singleShot(0, lambda: self._select_name_without_suffix_in_editor(index))
 
     def _rename_current_remote_item(self):
+        if not self._remote_action_allowed(announce=True):
+            return
         if self.selected_count() > 1:
             self.show_operation_feedback(app_tr("PaneController", "Batch-Umbenennen ist für Remote noch nicht verfügbar"))
             return
@@ -4066,6 +4123,8 @@ class PaneController(QObject):
         drag.exec(Qt.DropAction.CopyAction)
 
     def _start_remote_selection_drag(self, source_view) -> None:
+        if not self._remote_action_allowed():
+            return
         if self.current_location is None or not self.current_location.is_remote:
             return
         if source_view is None:
@@ -4148,6 +4207,8 @@ class PaneController(QObject):
     def apply_tab_state(self, state, push_history=False):
         self.icon_zoom_percent = max(50, min(300, int(getattr(state, "icon_zoom_percent", 100))))
         self.apply_view_mode(state.view_mode)
+        state.location = self._coerce_remote_disabled_location(state.location, fallback_to_local=True)
+        state.title = self._navigation_service.display_name_for_location(state.location)
         self.navigate_to(state.location, push_history=push_history)
 
         self._selection_restore_service.remember(state.selected_paths, state.scroll_value)
@@ -4203,6 +4264,7 @@ class PaneController(QObject):
             location = path if path.is_remote else self._resolve_local_location(path.path)
         else:
             location = self._resolve_local_location(path)
+        location = self._coerce_remote_disabled_location(location, fallback_to_local=False, announce=True)
         if location is None:
             return
         target_path = location.path
@@ -4255,10 +4317,7 @@ class PaneController(QObject):
 
         if location.is_remote:
             self._pending_root_path = None
-            if self._remote_drive_controller is None:
-                self.show_operation_feedback(
-                    app_tr("PaneController", "Remote-Kontexte sind im Pane noch nicht aktiviert")
-                )
+            if not self._remote_action_allowed(announce=True):
                 return
             try:
                 entries = self._remote_drive_controller.list_directory(location)
@@ -4338,6 +4397,8 @@ class PaneController(QObject):
         if current_location is None:
             return
         if current_location.is_remote:
+            if not self._remote_action_allowed(announce=True):
+                return
             parent_location = self._remote_drive_controller.get_parent_location(current_location) if self._remote_drive_controller is not None else None
         else:
             parent_location = self._navigation_service.get_parent_location(current_location)
@@ -4354,13 +4415,46 @@ class PaneController(QObject):
         if current_location is None:
             return False
         if current_location.is_remote:
-            if self._remote_drive_controller is None:
+            if not self._remote_action_allowed():
                 return False
             return self._remote_drive_controller.get_parent_location(current_location) is not None
         return self._navigation_service.get_parent_location(current_location) is not None
 
     def current_path(self):
         return self.current_location.path
+
+    def apply_remote_feature_state(self):
+        if self._is_remote_feature_enabled():
+            self.emit_navigation_state()
+            return
+
+        fallback_location = self._default_local_location()
+        changed = False
+        for index, state in enumerate(self.tab_states):
+            coerced_location = self._coerce_remote_disabled_location(
+                state.location,
+                fallback_to_local=True,
+            )
+            if coerced_location != state.location:
+                state.location = coerced_location
+                state.selected_paths = []
+                changed = True
+            filtered_history = [item for item in state.history if not item.is_remote]
+            if filtered_history != state.history:
+                state.history = filtered_history
+                changed = True
+            state.title = self._navigation_service.display_name_for_location(state.location)
+            if self.tab_bar is not None and 0 <= index < self.tab_bar.count():
+                self.tab_bar.setTabText(index, state.title)
+                self.update_tab_visual(index)
+
+        if self.current_location is not None and self.current_location.is_remote:
+            self.navigate_to(fallback_location, push_history=False)
+            return
+        if changed and self.get_active_tab_state() is not None:
+            self.apply_tab_state(self.get_active_tab_state(), push_history=False)
+            return
+        self.emit_navigation_state()
 
     def current_view_mode(self):
         return self.filetree_view_mode
@@ -4535,6 +4629,14 @@ class PaneController(QObject):
         )
 
         self.commit_pending_tree_edit()
+        if self.current_location is not None:
+            coerced_location = self._coerce_remote_disabled_location(
+                self.current_location,
+                fallback_to_local=True,
+            )
+            if coerced_location != self.current_location:
+                self.navigate_to(coerced_location, push_history=False)
+                return
         if force_rescan and self.current_location is not None and self.current_location.is_local:
             # Force QFileSystemModel cache invalidation by switching root once.
             try:
