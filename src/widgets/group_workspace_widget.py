@@ -319,6 +319,9 @@ class GroupWorkspaceWidget(QWidget):
         self._active_slot = "primary"
         self._render()
 
+    def current_split_mode(self) -> str:
+        return str(self._split_mode or "single")
+
     def apply_close_icon_settings(self, show_file_tab_close_icons: bool):
         for pane in self._pane_by_slot().values():
             if hasattr(pane, "set_show_tab_close_icons"):

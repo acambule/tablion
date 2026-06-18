@@ -13,7 +13,7 @@ from pathlib import Path
 from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (QApplication, QMainWindow, QTreeWidget, QSplitter, QWidget, QToolButton, QStyle, QMenu, QTabWidget, QVBoxLayout, QSizePolicy, QMessageBox, QFileDialog)
 from PySide6.QtUiTools import QUiLoader
-from PySide6.QtCore import QDir, QEvent, Qt, QTimer, QStandardPaths, QUrl
+from PySide6.QtCore import QDir, QEvent, Qt, QTimer, QStandardPaths, QSize, QUrl
 
 from controllers.group_controller import GroupController
 from controllers.remote_drive_controller import RemoteDriveController
@@ -66,7 +66,8 @@ class MainWindow(QMainWindow):
         self.group_controller = None
         self.navigator_manager = None
         self.btn_nav_menu = None
-        self.btn_split_view = None
+        self.btn_split_toggle = None
+        self.btn_split_menu = None
         self.action_refresh_tree = None
         self.action_group = None
         self._action_settings = None
@@ -75,6 +76,7 @@ class MainWindow(QMainWindow):
         self._action_split_single = None
         self._action_split_2 = None
         self._action_split_4 = None
+        self._last_non_single_split_mode = "2-split"
         self._settings_dialog = None
         self.plain_tabbing_mode = True
         self._persisted_once = False
@@ -259,6 +261,7 @@ class MainWindow(QMainWindow):
             self.update_window_title(active_path)
             self._update_temporary_context_notice(active_path)
             self.update_nav_buttons()
+        self.update_split_button_state()
         if _new is not None:
             self.schedule_local_office_web_sync_check()
 
@@ -406,11 +409,13 @@ class MainWindow(QMainWindow):
         active_pane = self.get_active_pane()
         if not active_pane:
             self._update_temporary_context_notice("")
+            self.update_split_button_state()
             return
         active_path = active_pane.current_path()
         self.update_window_title(active_path)
         self._update_temporary_context_notice(active_path)
         self.update_nav_buttons()
+        self.update_split_button_state()
 
     def _is_temporary_path(self, path: str) -> bool:
         candidate = Path(QDir.cleanPath(str(path or ""))).expanduser()
@@ -467,6 +472,7 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(active_group.widget, 1)
         active_group.optimize_columns()
         self.update_split_active_highlight()
+        self.update_split_button_state()
 
     def set_single_view_mode(self):
         active_pane = self.get_active_pane()
@@ -475,6 +481,7 @@ class MainWindow(QMainWindow):
         active_pane.set_split_mode("single")
         self.update_split_active_highlight()
         self.update_nav_buttons()
+        self.update_split_button_state()
         self.update_window_title(active_pane.current_path())
 
     def set_two_split_view_mode(self):
@@ -484,6 +491,7 @@ class MainWindow(QMainWindow):
         active_pane.set_split_mode("2-split")
         self.update_split_active_highlight()
         self.update_nav_buttons()
+        self.update_split_button_state()
         self.update_window_title(active_pane.current_path())
 
     def set_four_split_view_mode(self):
@@ -493,7 +501,17 @@ class MainWindow(QMainWindow):
         active_pane.set_split_mode("4-split")
         self.update_split_active_highlight()
         self.update_nav_buttons()
+        self.update_split_button_state()
         self.update_window_title(active_pane.current_path())
+
+    def update_split_button_state(self):
+        if self.btn_split_toggle is None:
+            return
+        active_pane = self.get_active_pane()
+        current_mode = "single"
+        if active_pane is not None and hasattr(active_pane, "current_split_mode"):
+            current_mode = str(active_pane.current_split_mode() or "single")
+        self.btn_split_toggle.setChecked(current_mode != "single")
 
     def on_group_tab_bar_double_clicked(self, tab_index):
         debug_log(f"on_group_tab_bar_double_clicked(tab_index={tab_index})")
@@ -1024,7 +1042,8 @@ class MainWindow(QMainWindow):
 
     def setup_navigation_toolbar(self):
         self.btn_nav_menu = self.ui.findChild(QToolButton, "btnNavMenu")
-        self.btn_split_view = self.ui.findChild(QToolButton, "btnSplitView")
+        self.btn_split_toggle = self.ui.findChild(QToolButton, "btnSplitToggle")
+        self.btn_split_menu = self.ui.findChild(QToolButton, "btnSplitMenu")
         left_toolbar = self.ui.findChild(QWidget, "leftToolbar")
         if left_toolbar is not None:
             left_toolbar.hide()
@@ -1065,21 +1084,82 @@ class MainWindow(QMainWindow):
             self._action_quit.triggered.connect(self.quit_application)
             self.btn_nav_menu.setMenu(burger_menu)
 
-        if self.btn_split_view:
-            split_icon = QIcon.fromTheme("view-split-left-right")
-            if split_icon.isNull():
-                split_icon = QIcon.fromTheme("view-grid")
-            if split_icon.isNull():
-                split_icon = style.standardIcon(QStyle.StandardPixmap.SP_FileDialogListView)
+        split_icon = QIcon.fromTheme("view-split-left-right")
+        if split_icon.isNull():
+            split_icon = QIcon.fromTheme("view-grid")
+        if split_icon.isNull():
+            split_icon = style.standardIcon(QStyle.StandardPixmap.SP_FileDialogListView)
+        split_menu_icon = QIcon.fromTheme("pan-down-symbolic")
+        if split_menu_icon.isNull():
+            split_menu_icon = QIcon.fromTheme("go-down-symbolic")
+        if split_menu_icon.isNull():
+            split_menu_icon = style.standardIcon(QStyle.StandardPixmap.SP_ArrowDown)
 
-            self.btn_split_view.setIcon(split_icon)
-            self.btn_split_view.setText("")
-            self.btn_split_view.setToolTip(app_tr("MainWindow", "Split-View"))
-            self.btn_split_view.setAutoRaise(True)
-            self.btn_split_view.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            self.btn_split_view.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        if self.btn_split_toggle:
+            self.btn_split_toggle.setIcon(split_icon)
+            self.btn_split_toggle.setIconSize(QSize(16, 16))
+            self.btn_split_toggle.setText("")
+            self.btn_split_toggle.setToolTip(app_tr("MainWindow", "Split-View"))
+            self.btn_split_toggle.setAutoRaise(False)
+            self.btn_split_toggle.setCheckable(True)
+            self.btn_split_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            self.btn_split_toggle.clicked.connect(self.toggle_last_split_view_mode)
+            self.btn_split_toggle.setStyleSheet(
+                "QToolButton {"
+                " border: 1px solid rgba(110, 160, 255, 0.22);"
+                " border-right: none;"
+                " border-top-left-radius: 4px;"
+                " border-bottom-left-radius: 4px;"
+                " background: transparent;"
+                " padding: 0px;"
+                "}"
+                "QToolButton:hover {"
+                " background-color: rgba(110, 160, 255, 0.16);"
+                " border-color: rgba(110, 160, 255, 0.38);"
+                "}"
+                "QToolButton:checked {"
+                " background-color: rgba(110, 160, 255, 0.24);"
+                " border-color: rgba(110, 160, 255, 0.55);"
+                " border-right: none;"
+                "}"
+                "QToolButton:pressed {"
+                " background-color: rgba(110, 160, 255, 0.30);"
+                " border-color: rgba(110, 160, 255, 0.62);"
+                " border-right: none;"
+                "}"
+            )
 
-            split_menu = QMenu(self.btn_split_view)
+        if self.btn_split_menu:
+            self.btn_split_menu.setIcon(split_menu_icon)
+            self.btn_split_menu.setIconSize(QSize(10, 10))
+            self.btn_split_menu.setText("")
+            self.btn_split_menu.setToolTip(app_tr("MainWindow", "Split-View-Menü"))
+            self.btn_split_menu.setAutoRaise(False)
+            self.btn_split_menu.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            self.btn_split_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            self.btn_split_menu.setStyleSheet(
+                "QToolButton {"
+                " border-top: 1px solid rgba(110, 160, 255, 0.22);"
+                " border-right: 1px solid rgba(110, 160, 255, 0.22);"
+                " border-bottom: 1px solid rgba(110, 160, 255, 0.22);"
+                " border-left: 1px solid rgba(110, 160, 255, 0.16);"
+                " border-top-right-radius: 4px;"
+                " border-bottom-right-radius: 4px;"
+                " background: transparent;"
+                " padding: 0px;"
+                "}"
+                "QToolButton:hover {"
+                " background-color: rgba(110, 160, 255, 0.16);"
+                " border-color: rgba(110, 160, 255, 0.38);"
+                "}"
+                "QToolButton:pressed {"
+                " background-color: rgba(110, 160, 255, 0.30);"
+                " border-color: rgba(110, 160, 255, 0.62);"
+                "}"
+            )
+
+        if self.btn_split_menu:
+            split_menu = QMenu(self.btn_split_menu)
             self._action_split_single = split_menu.addAction(app_tr("MainWindow", "Einzelansicht"))
             split_menu.addSeparator()
             self._action_split_2 = split_menu.addAction(app_tr("MainWindow", "2-Split"))
@@ -1087,7 +1167,9 @@ class MainWindow(QMainWindow):
             self._action_split_single.triggered.connect(lambda: self.on_split_view_selected("single"))
             self._action_split_2.triggered.connect(lambda: self.on_split_view_selected("2-split"))
             self._action_split_4.triggered.connect(lambda: self.on_split_view_selected("4-split"))
-            self.btn_split_view.setMenu(split_menu)
+            self.btn_split_menu.setMenu(split_menu)
+
+        self.update_split_button_state()
 
     def retranslate_ui_texts(self):
         if self.btn_nav_menu is not None:
@@ -1099,8 +1181,10 @@ class MainWindow(QMainWindow):
         if self._action_quit is not None:
             self._action_quit.setText(app_tr("MainWindow", "Beenden"))
 
-        if self.btn_split_view is not None:
-            self.btn_split_view.setToolTip(app_tr("MainWindow", "Split-View"))
+        if self.btn_split_toggle is not None:
+            self.btn_split_toggle.setToolTip(app_tr("MainWindow", "Split-View"))
+        if self.btn_split_menu is not None:
+            self.btn_split_menu.setToolTip(app_tr("MainWindow", "Split-View-Menü"))
         if self._action_split_single is not None:
             self._action_split_single.setText(app_tr("MainWindow", "Einzelansicht"))
         if self._action_split_2 is not None:
@@ -1111,6 +1195,7 @@ class MainWindow(QMainWindow):
         active_pane = self.get_active_pane()
         if active_pane is not None:
             self._update_temporary_context_notice(active_pane.current_path())
+        self.update_split_button_state()
     
     def setup_navigator(self):
         navigator_widget = self.ui.findChild(QTreeWidget, "treeNavigator")
@@ -1217,6 +1302,8 @@ class MainWindow(QMainWindow):
             tree_view.setFocus()
 
     def on_split_view_selected(self, mode):
+        if mode in {"2-split", "4-split"}:
+            self._last_non_single_split_mode = mode
         if mode == "single":
             self.set_single_view_mode()
             return
@@ -1226,6 +1313,16 @@ class MainWindow(QMainWindow):
         if mode == "4-split":
             self.set_four_split_view_mode()
             return
+
+    def toggle_last_split_view_mode(self):
+        active_pane = self.get_active_pane()
+        if not active_pane:
+            return
+        current_mode = "single"
+        if hasattr(active_pane, "current_split_mode"):
+            current_mode = str(active_pane.current_split_mode() or "single")
+        target_mode = "single" if current_mode == self._last_non_single_split_mode else self._last_non_single_split_mode
+        self.on_split_view_selected(target_mode)
 
     def closeEvent(self, event):
         debug_log("MainWindow.closeEvent received")
